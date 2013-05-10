@@ -11,22 +11,23 @@ default
 
 Install under /usr/local/bin/:
 
-'''bash
+```bash
 sudo ./dconfini --self-install
-'''
+```
 
-Install under a different directory:
+custom directory
+****************
 
-'''bash
+```bash
 sudo ./dconfini --self-install --bindir /opt/local/bin
-'''
+```
 
 Usage
 -----
 
-'''bash
+```bash
 dconfini /etc/stuff.conf my.conf.field
-'''
+```
 
 
 
