@@ -1,0 +1,575 @@
+#!/usr/local/bin/perl
+
+# Copyright (c) 2013 Don Owens <don@regexguy.com>.  All rights reserved.
+#
+# This software is released under the BSD license:
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+#  * Redistributions in binary form must reproduce the above
+#    copyright notice, this list of conditions and the following
+#    disclaimer in the documentation and/or other materials provided
+#    with the distribution.
+#
+#  * Neither the name of the author nor the names of its
+#    contributors may be used to endorse or promote products derived
+#    from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+# OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Prints the requested value or values from an ini-style config
+# file.  Run without arguments, or with --help for usage
+# information.
+
+# Available for download from
+# https://raw.github.com/cuberat/cmd-utils/master/dconfini
+
+use strict;
+use warnings;
+use Getopt::Long qw(:config no_ignore_case bundling);
+
+our $VERSION = '0.7';
+
+# main
+{
+    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+
+    my $self = bless { prog => $prog, };
+
+    my $opts = $self->get_options([ "help|h",
+                                    "version|V",
+                                    "conf|conffile|conf-file|file|c=s",
+                                    "field|f=s",
+                                    "is=s",
+                                    "os=s",
+                                    "n",
+                                    "test",
+                                    "pod|man",
+                                    "self_install|selfinstall|self-install",
+                                    "prefix=s",
+                                    "bindir=s",
+                                  ], { });
+    $self->check_options($opts, [ ]); # die's on bad options
+
+    if ($opts->{version}) {
+        print STDERR $self->get_full_version;
+        exit 0;
+    }
+
+    if ($ENV{HARNESS_ACTIVE} and $ENV{DCONFINI_TEST_ACTIVE}) {
+        $self->self_test;
+        exit 0;
+    }
+
+    if ($opts->{test}) {
+        $self->run_self_test;
+        exit 0;
+    }
+
+    if ($opts->{self_install}) {
+        $self->self_install($opts->{prefix}, $opts->{bindir});
+        exit 0;
+    }
+
+    if ($opts->{pod}) {
+        $self->do_pod;
+        exit 0;
+    }
+
+    my $conf_file;
+    my $field;
+    if (defined $opts->{conf}) {
+        $conf_file = $opts->{conf};
+    }
+    else {
+        unless (@ARGV >= 1) {
+            $self->print_usage;
+            exit 1;
+        }
+
+        $conf_file = shift @ARGV;
+    }
+
+    if (defined $opts->{field}) {
+        $field = $opts->{field};
+    }
+    else {
+        unless (@ARGV >= 1) {
+            $self->print_usage;
+            exit 1;
+        }
+
+        $field = shift @ARGV;
+    }
+
+    $self->do_main($opts, $conf_file, $field, *STDOUT);
+
+}
+
+exit 0;
+
+###############################################################################
+# Subroutines
+
+sub do_main {
+    my ($self, $opts, $conf_file, $field, $out_fh) = @_;
+
+    my $conf = $self->get_conf($conf_file);
+
+    my @fields;
+
+    if (defined $opts->{is}) {
+        @fields = split quotemeta($opts->{is}), $field;
+        $opts->{os} = $opts->{is} unless defined $opts->{os};
+    }
+    else {
+        @fields = ($field);
+    }
+
+    my @vals;
+    foreach my $f (@fields) {
+        my $val = $self->extract_field($conf, $f);
+        $val = '' unless defined $val;
+
+        if (UNIVERSAL::isa($val, 'HASH')) {
+            warn "$self->{prog}: '$f' not a leaf node";
+            $val = '';
+        }
+
+        push @vals, $val;
+    }
+
+    if (defined $opts->{os}) {
+        print $out_fh join($opts->{os}, @vals);
+    }
+    else {
+        print $out_fh @vals;
+    }
+
+    print $out_fh "\n" if $opts->{n};
+}
+
+sub get_full_version {
+    my ($self) = @_;
+
+    my $prog = $self->{prog};
+    return "$prog " . $VERSION . "\n";
+}
+
+sub extract_field {
+    my ($self, $conf, $field) = @_;
+
+    return $conf->{$field};
+
+    my @hier = split /\./, $field;
+
+    my $data = $conf;
+    for my $f (@hier) {
+        return undef unless defined $data and UNIVERSAL::isa($data, 'HASH');
+
+        $data = $data->{$f};
+    }
+
+    return $data;
+}
+
+sub get_conf {
+   my ($self, $file) = @_;
+
+   if (UNIVERSAL::isa($file, 'GLOB')) {
+       return $self->get_conf_fh($file);
+   }
+
+   open(my $in_fh, '<', $file) or return undef;
+   my $data = $self->get_conf_fh($in_fh);
+   close $in_fh;
+
+   return $data;
+}
+
+sub get_conf_fh {
+    my ($self, $in_fh) = @_;
+
+    my $data = { };
+    my $line;
+    my $section = 'global';
+    while ($line = <$in_fh>) {
+        next if $line =~ /^\s*;/; # comment at beginning of line
+        next if $line =~ /^\s*$/; # empty line
+
+        if ($line =~ /^\s*\[(.+)\]\s*$/) {
+            $section = $1;
+            next;
+        }
+
+        if ($line =~ /^\s*(.+?)\s*(?<!\\)=\s*(["'])(.*)(?<!\\)\2(.*)/) {
+            my $field = $1;
+            my $val = $3;
+
+            if ($field =~ /(?<!\\);/) {
+                warn "junk at start of line $.";
+                next;
+            }
+
+            $field =~ s/\\=/=/g;
+
+            $self->set_field($field, $val, $data, $section);
+            next;
+        }
+
+        $line =~ s/(?<!\\);.*$//; # comment at end of line
+        $line =~ s/\\;/;/g;       # unescape escaped comment chars
+
+
+        if ($line =~ /^\s*(.+?)\s*(?<!\\)=\s*(.*)\s*/) {
+            my $field = $1;
+            my $val = $2;
+
+            $field =~ s/\\=/=/g;
+
+            $self->set_field($field, $val, $data, $section);
+
+            next;
+        }
+
+        warn "$self->{prog}: unrecognized format at line $.";
+    }
+
+    return $data;
+}
+
+sub set_field {
+    my ($self, $field, $val, $data, $section) = @_;
+
+    $data->{"$section.$field"} = $val;
+
+    return 1;
+
+    my @hier = split /\./, $field;
+
+    my $this_data = $data;
+    for my $f ($section, @hier[0 .. $#hier - 1]) {
+        $this_data->{$f} = { } unless exists $this_data->{$f};
+        $this_data = $this_data->{$f};
+    }
+
+    $this_data->{$hier[$#hier]} = $val;
+}
+
+sub run_self_test {
+    my ($self) = @_;
+
+    my $perl = $self->get_perl_exec;
+    my $me = __FILE__;
+
+    $ENV{DCONFINI_TEST_ACTIVE} = 1;
+
+    (my $sf_me = $me) =~ s/'/\\'/g;
+    my @cmd = ($perl, '-MTest::Harness', '-e', "runtests('$sf_me')");
+    # my @cmd = ($perl, "-MExtUtils::Command::MM", "-e", "test_harness(0)", $me);
+
+    exec {$cmd[0]} @cmd;
+
+    exit 0;
+}
+
+sub self_test {
+    my ($self) = @_;
+
+    eval 'use Test::More tests => 4';
+
+    ok(1, "dummy test");
+
+    my $conf_str = qq{stuff=3
+
+[db]
+foo.bar=stuff
+more=1
+stuff=2
+};
+
+    my $out_str = '';
+    open(my $in_fh, '<', \$conf_str)
+        or die "couldn't create filehandle for string";
+    open(my $out_fh, '>', \$out_str);
+
+    $self->do_main({ }, $in_fh, 'db.more', $out_fh);
+
+    close $in_fh;
+    close $out_fh;
+
+    is($out_str, '1', "simple check");
+
+    $out_str = '';
+    undef $in_fh;
+    undef $out_fh;
+    open($in_fh, '<', \$conf_str)
+        or die "couldn't create filehandle for string";
+    open($out_fh, '>', \$out_str);
+
+    $self->do_main({ }, $in_fh, 'db.foo.bar', $out_fh);
+
+    close $in_fh;
+    close $out_fh;
+
+    is($out_str, 'stuff', "deeper level");
+
+        $out_str = '';
+    undef $in_fh;
+    undef $out_fh;
+    open($in_fh, '<', \$conf_str)
+        or die "couldn't create filehandle for string";
+    open($out_fh, '>', \$out_str);
+
+    $self->do_main({ }, $in_fh, 'global.stuff', $out_fh);
+
+    close $in_fh;
+    close $out_fh;
+
+    is($out_str, '3', "global level");
+
+}
+
+########## begin option processing ##########
+sub print_usage {
+    print STDERR qq{\nUsage: @{[ ($0 =~ m{\A.*/([^/]+)\Z})[0] || $0 ]} options [<conf_file>] [<field_name>]
+
+    Options:
+        [-V | --version]  # print version
+        [-c <conf_file>]  # path to ini-style config file
+        [-f <field_name>] # field name to extract
+        [--is <sep>]      # input separator
+        [--os <sep>]      # output separator
+        [-n]              # print a newline after the value
+        [--self-install]  # install somewhere (defaults to /usr/local/bin)
+        [--prefix <dir>]  # install prefix (defaults to /usr/local)
+        [--bindir <dir>]  # bin dir (defaults to \$prefix/bin)
+
+        [-h | --help]     # this help msg
+        [--man]           # display manpage-like documentation (perldoc)
+\n};
+}
+
+sub check_options {
+    my ($self, $opts, $required) = @_;
+
+    if (not $opts or $opts->{help}) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    my $opt_ok = 1;
+    $required = [ ] unless $required;
+    foreach my $key (@$required) {
+        if (defined($opts->{$key})) {
+            if (my $v = $opts->{$key}) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        unless (@$v) {
+                            $opt_ok = 0;
+                            warn "$self->{prog}: missing required option '$key'
+";
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            $opt_ok = 0;
+            warn "$self->{prog}: missing required option '$key'\n";
+        }
+    }
+
+    unless ($opt_ok) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    return $opt_ok;
+}
+
+sub get_options {
+    my ($self, $spec, $defaults) = @_;
+    my %opts = $defaults ? %$defaults : ();
+    $spec = [ ] unless $spec;
+
+    my $process_opt = sub {
+        my ($key, $val) = @_;
+
+        if (scalar(@_) > 2) {
+            $opts{$key}{$val} = $_[2];
+        }
+        else {
+            if ( exists($opts{$key}) and (my $v = $opts{$key}) ) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        push @{ $opts{$key} }, $val;
+                        return 1;
+                    }
+                }
+            }
+
+            $opts{$key} = $val;
+        }
+    };
+
+    my $opt_rv = Getopt::Long::GetOptions(map { ($_ => $process_opt) } @$spec);
+
+    return $opt_rv ? \%opts : undef;
+}
+########## end option processing ##########
+
+sub self_install {
+    my ($self, $prefix, $bin_dir) = @_;
+
+    unless (defined $prefix or defined $bin_dir) {
+        $bin_dir = '/usr/local/bin';
+    }
+
+    $bin_dir = "$prefix/bin" unless defined $bin_dir;
+
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    my $script = __FILE__;
+
+    unless (-w $bin_dir) {
+        print STDERR "\ndconfini: can't write to $bin_dir.  ";
+        print STDERR "Maybe you need to run me as root?\n\n";
+        exit 1;
+    }
+
+    my $new_path = "$bin_dir/dconfini";
+
+    open(my $in_fh, '<', $script) or
+        die "couldn't open script source '$script'";
+    my $line;
+
+    open(my $out_fh, '>', $new_path)
+        or die "couldn't open output file $new_path";
+
+    $line = <$in_fh>; # eat shebang line
+    print $out_fh "#!$perl\n";
+
+    while ($line = <$in_fh>) {
+        print $out_fh $line;
+    }
+
+    close $out_fh;
+    close $in_fh;
+
+    chmod 0755, $new_path;
+
+    print STDERR "Installed as $new_path\n";
+}
+
+sub do_pod {
+    my ($self) = @_;
+
+    my $src = __FILE__;
+
+    my $perl = $self->get_perl_exec;
+
+    require File::Basename;
+    my $dir = File::Basename::dirname($perl);
+    my $perldoc = "$dir/perldoc";
+
+    $perldoc = "perldoc" unless -x $perldoc;
+
+    if (system $perldoc, $src) {
+        print STDERR "dconfini: couldn't run '$perldoc $src': $?\n";
+        exit 1;
+    }
+    exit 0;
+}
+
+sub get_perl_exec {
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    return $perl;
+}
+
+=pod
+
+=head1 NAME
+
+dconfini - Retrieve values from an ini-style config file
+
+=head1 SYNOPSIS
+
+  dconfini /etc/stuff.conf my.conf.field
+
+=head1 DESCRIPTION
+
+=head2 OPTIONS
+
+=head3 C<-c E<lt>conf_fileE<gt>>
+
+path to ini-style config file
+
+=head3 C<-f E<lt>field_nameE<gt>>
+
+field name to extract
+
+=head3 C<--is E<lt>sepE<gt>>
+
+input separator
+
+=head3 C<--os E<lt>sepE<gt>>
+
+output separator
+
+=head3 C<-n>
+
+print a newline after the value
+
+=head3 C<--self-install>
+
+install somewhere (defaults to /usr/local/bin)
+
+=head3 C<--prefix E<lt>dirE<gt>>
+
+install prefix (defaults to /usr/local)
+
+=head3 C<--bindir E<lt>dirE<gt>>
+
+bin dir (defaults to $prefix/bin)
+
+=head3 C<-V | --version>
+
+print version
+
+=head3 C<-h | --help>
+
+this help msg
+
+=head3 C<--man>
+
+display manpage-like documentation (perldoc)
+
+=cut
