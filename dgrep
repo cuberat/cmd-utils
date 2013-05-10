@@ -63,11 +63,22 @@ our $VERSION = "0.3";
                                     "self_install|selfinstall|self-install",
                                     "prefix=s",
                                     "bindir=s",
+                                    "test",
                                   ], { });
     $self->check_options($opts, [ ]); # die's on bad options
 
     if ($opts->{version}) {
         print STDERR $self->get_full_version;
+        exit 0;
+    }
+
+    if ($ENV{HARNESS_ACTIVE} and $ENV{DCONFINI_TEST_ACTIVE}) {
+        $self->self_test;
+        exit 0;
+    }
+
+    if ($opts->{test}) {
+        $self->run_self_test;
         exit 0;
     }
 
@@ -453,4 +464,42 @@ sub get_full_version {
     my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
 
     return "$prog " . $VERSION . "\n";
+}
+
+sub get_perl_exec {
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    return $perl;
+}
+
+sub run_self_test {
+    my ($self) = @_;
+
+    my $perl = $self->get_perl_exec;
+    my $me = __FILE__;
+
+    $ENV{DCONFINI_TEST_ACTIVE} = 1;
+
+    (my $sf_me = $me) =~ s/'/\\'/g;
+    my @cmd = ($perl, '-MTest::Harness', '-e', "runtests('$sf_me')");
+    # my @cmd = ($perl, "-MExtUtils::Command::MM", "-e", "test_harness(0)", $me);
+
+    exec {$cmd[0]} @cmd;
+
+    exit 0;
+}
+
+sub self_test {
+    my ($self) = @_;
+
+    eval 'use Test::More tests => 1';
+
+    ok(1, "dummy test");
+
+    exit 0;
 }
