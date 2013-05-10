@@ -1,0 +1,887 @@
+#!/usr/local/bin/perl
+
+# Copyright (c) 2008-2013 Don Owens <don@regexguy.com>.  All rights reserved.
+#
+# This software is released under the BSD license:
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+#  * Redistributions in binary form must reproduce the above
+#    copyright notice, this list of conditions and the following
+#    disclaimer in the documentation and/or other materials provided
+#    with the distribution.
+#
+#  * Neither the name of the author nor the names of its
+#    contributors may be used to endorse or promote products derived
+#    from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+# OF THE POSSIBILITY OF SUCH DAMAGE.
+
+use strict;
+use warnings;
+# use Carp;
+use Getopt::Long qw(:config no_ignore_case bundling);
+
+our $VERSION = '0.3';
+
+# main
+{
+    # local($SIG{__DIE__}) = sub { &Carp::confess };
+
+    my $self = bless { unique => { } };
+    $self->process_options;
+
+    my $options = $self->{options};
+
+    $self->quick_check_options($options);
+
+    my $arg_list;
+    if (@ARGV) {
+        $arg_list = \@ARGV;
+    }
+    else {
+        $arg_list = [ '.' ];
+        $self->{cur_dir_only} = 1 unless defined $options->{unique};
+    }
+
+    if ($options->{R}) {
+        if ($options->{xml} or $options->{json}) {
+            die "\n$0: -R option not supported with --xml or --json options\n\n";
+        }
+    }
+
+    if ($options->{xml}) {
+        print "<listing>\n";
+    }
+    elsif ($options->{json}) {
+        unless ($self->load_json) {
+            die "\n$0: couldn't load Perl module JSON::DWIW\n\n";
+        }
+
+        print "[\n";
+    }
+
+    $self->{is_first} = 1;
+    foreach my $arg (@$arg_list) {
+        $self->do_one_arg($arg);
+        $self->{is_first} = 0;
+    }
+
+    if ($options->{xml}) {
+        print "</listing>\n";
+    }
+    elsif ($options->{json}) {
+        print "]\n";
+    }
+}
+
+exit 0;
+
+###############################################################################
+# Subroutines
+
+sub process_options {
+    my ($self) = @_;
+
+    $self->my_setup_options([ 'a', 'F', 'l', 'h', 'd', 'T', 'S', 'r', 'c', 't',
+                              'nosort|f', 'A', 'i', 'help', 'u', 'xml', 'json',
+                              'n', 'R', 'unixts', 'dirsonly|do', 'filesonly',
+                              'self_install|self-install', 'test', 'version|V',
+                            ],
+                            [ 'regex=s', 'count=i', 'unique=s', 'bindir=s',
+                              'prefix=s', ] );
+
+    if (defined $self->{options}{unique}) {
+        $self->{unique_regex} = qr/$self->{options}{unique}/;
+    }
+
+    return 1;
+}
+
+sub my_setup_options {
+    my ($self, $bool_opts, $rest) = @_;
+
+    my $options = { };
+    $self->{options} = $options;
+
+    my @args;
+
+    if (defined($bool_opts)) {
+        foreach my $opt (@$bool_opts) {
+            my @opts = split /\|/, $opt;
+            my $key = $opts[0];
+
+            push @args, $opt => sub { $options->{$key} = $_[1]; };
+        }
+    }
+
+    if (defined($rest)) {
+        foreach my $opt (@$rest) {
+            my @opts = split /\|/, $opt;
+            my $key = (split(/=/, $opts[0]))[0];
+
+            push @args, $opt => sub { $options->{$key} = $_[1]; };
+        }
+    }
+
+    my $opt_rv = Getopt::Long::GetOptions(@args);
+
+    if (not $opt_rv or $options->{help}) {
+        print STDERR qq{\nUsage: @{[ ($0 =~ m{\A.*/([^/]+)\Z})[0] || $0 ]} options
+
+    Options (all optional):
+      -A          # List all entries except for . and .. - always set for the
+                  # superuser
+      -R          # Recursively list subdirectories encountered.
+      -S          # Sort files by size
+      -T          # When used with the -l (lowercase letter ``ell'') option,
+                  # display complete time information for the file, including
+                  # month, day, hour, minute, second, and year.
+      -a          # Include directory entries whose names begin with a dot (.).
+      -c          # Use time when file status was last changed for sorting or
+                  # printing
+      -d          # Directories are listed as plain files (not searched
+                  # recursively).
+      -f          # Output is not sorted.
+      -h          # When used with the -l option, use unit suffixes: Byte,
+                  # Kilobyte, Megabyte, Gigabyte, Terabyte and Petabyte in
+                  # order to reduce the number of digits to three or less
+                  # using base 2 for sizes.
+      -i          # For each file, print the file's file serial number (inode
+                  # number).
+      -l          # List in long format.
+      -n          # Display user and group IDs numerically rather than
+                  # converting to a user or group name in a long (-l) output.
+      -r          # Reverse the order of the sort to get reverse lexicographical
+                  # order or the oldest entries first (or largest files last, if
+                  # combined with sort by size (-S) flag).
+      -t          # Sort by time modified (most recently modified first).
+      -u          # Use time of last access, instead of last modification of the
+                  # file for sorting (-t) or printing (-l).
+      --count <n> # List a maximum of n entries.
+      --dirsonly  # Only list directories
+      --filesonly # List non-directories only
+      --help      # this help msg
+      --json      # Output in JSON (requires the JSON::DWIW Perl module to be
+                  # installed)
+      --unique <regex> # list the first file found for each unique match of
+                       # the given regular expression
+      --unixts    # Output times as unix timestamps (number of seconds since
+                  # Jan 1, 1970, UTC).
+      --xml       # Output in XML - no checks are made to ensure valid utf-8
+\n};
+        exit 1;
+    }
+}
+
+sub do_one_arg {
+    my ($self, $arg, $last_arg) = @_;
+
+    unless (-e $arg) {
+        # FIXME: return error
+
+        return;
+    }
+
+    if (-d $arg) {
+        if ($self->{options}{d}) {
+            $self->print_file(undef, $arg);
+            return 1;
+        }
+
+        $self->do_directory($arg);
+    }
+    else {
+        my $dpy = $self->build_file_dpy(undef, $arg);
+        print $dpy . "\n";
+    }
+
+    return 1;
+}
+
+sub pass_checks {
+    my ($self, $file, $dir) = @_;
+
+    my $full_path = (defined($dir) and $dir ne '') ? $dir . '/' . $file : $file;
+
+    my $options = $self->{options};
+
+    unless ($options->{a}) {
+        unless ( ($options->{A} or $> == 0) and $file ne '.' and $file ne '..') {
+            return 0 if $file =~ /\A\./;
+        }
+    }
+
+    if ($options->{dirsonly}) {
+        return 0 unless -d $full_path;
+    }
+    elsif ($options->{filesonly}) {
+        return 0 if -d $full_path;
+    }
+
+    if (defined($options->{regex}) and $options->{regex} ne '') {
+        my $regex = $options->{regex};
+        $regex = qr/$regex/;
+        return 0 unless $file =~ /$regex/;
+    }
+
+    if (defined $self->{unique_regex}) {
+        # print STDERR "file='$file'\n";
+
+        return 0 unless $file =~ $self->{unique_regex};
+
+        my $match = $&;
+        # print STDERR "match='$match'\n";
+        if (exists $self->{unique}{$match}) {
+            return 0;
+        }
+
+        $self->{unique}{$match} = $file;
+
+    }
+
+    return 1;
+}
+
+sub do_directory {
+    my ($self, $dir) = @_;
+
+    my $options = $self->{options};
+
+    my $in_dh;
+    unless (opendir($in_dh, $dir)) {
+        die "couldn't opendir $dir";
+    }
+
+    my @files;
+    my @dirs;
+    my $max_count = $options->{count};
+    my $cnt = 0;
+
+    if ($options->{f}) {
+        while (my $file = readdir($in_dh)) {
+            next unless $self->pass_checks($file);
+
+            $self->print_file($dir, $file);
+            $cnt++;
+
+            if (defined($max_count) and $max_count =~ /(\d+)/) {
+                last if $cnt >= $max_count;
+            }
+        }
+
+        closedir $in_dh;
+    }
+    elsif ($options->{S} or $options->{t} or $options->{c} or $options->{u}) {
+        my @info;
+        while (my $file = readdir($in_dh)) {
+            next unless $self->pass_checks($file);
+
+            my ($dpy, $info, $type) = $self->build_file_dpy($dir, $file, 1);
+            push @info, $info;
+
+            if ($options->{R} and $type eq 'd') {
+                push @dirs, $file;
+            }
+        }
+
+        closedir($in_dh);
+
+        my $sort_field = 'dpy';
+        my $numeric_sort = 0;
+        if ($options->{S}) {
+            $sort_field = 'size';
+            $numeric_sort = 1;
+        }
+        elsif ($options->{t}) {
+            $sort_field = 'mtime';
+            $numeric_sort = 1;
+        }
+        elsif ($options->{c}) {
+            $sort_field = 'ctime';
+            $numeric_sort = 1;
+        }
+        elsif ($options->{u}) {
+            $sort_field = 'atime';
+            $numeric_sort = 1;
+        }
+
+        if ($numeric_sort) {
+            if ($options->{r}) {
+                @info = sort { $a->{$sort_field} <=> $b->{$sort_field} } @info;
+            }
+            else {
+                @info = sort { $b->{$sort_field} <=> $a->{$sort_field} } @info;
+            }
+        }
+        else {
+            if ($options->{r}) {
+                @info = sort { $b->{$sort_field} cmp $a->{$sort_field} } @info;
+            }
+            else {
+                @info = sort { $a->{$sort_field} cmp $b->{$sort_field} } @info;
+            }
+
+        }
+
+
+        foreach my $e (@info) {
+            if ($options->{json} and not $self->{is_first}) {
+                print ',';
+            }
+
+            $self->{is_first} = 0;
+
+            print "$e->{dpy}\n";
+        }
+
+    }
+    else {
+        if ($options->{r}) {
+            @files = sort { $b cmp $a } readdir $in_dh;
+        }
+        else {
+            @files = sort readdir $in_dh;
+        }
+
+        closedir($in_dh);
+
+        foreach my $file (@files) {
+            next unless $self->pass_checks($file, $dir);
+
+            my ($ok, $info, $type) = $self->print_file($dir, $file);
+            $cnt++;
+            if (defined($max_count) and $max_count =~ /(\d+)/) {
+                last if $cnt >= $max_count;
+            }
+
+            if ($options->{R} and $type eq 'd') {
+                push @dirs, $file;
+            }
+        }
+
+    }
+
+    if ($options->{R} and @dirs) {
+        foreach my $todo (@dirs) {
+            if (defined($max_count) and $max_count =~ /(\d+)/) {
+                last if $cnt >= $max_count;
+            }
+
+            print "\n$dir/$todo:\n";
+            $self->do_directory($dir . '/' . $todo);
+
+            $cnt++;
+        }
+    }
+
+    return 1;
+}
+
+sub print_file {
+    my ($self, $dir, $file) = @_;
+
+    my ($dpy, $info, $type) = $self->build_file_dpy($dir, $file);
+
+    unless ($self->{is_first}) {
+        if ($self->{options}{json}) {
+            print ',';
+        }
+    }
+
+    print $dpy . "\n";
+
+    $self->{is_first} = 0;
+
+    return wantarray ? (1, $info, $type) : 1;
+}
+
+sub build_file_dpy {
+    my ($self, $dir, $file, $get_all_info) = @_;
+
+    my $dpy;
+    if ($self->{cur_dir_only}) {
+        $dpy = $file;
+    }
+    elsif (defined($dir)) {
+        # $dpy = $dir . '/' . $file;
+        $dpy = $file;
+    }
+    else {
+        $dpy = $file;
+    }
+
+    my $options = $self->{options};
+
+    my $info = { };
+    my $file_type = '';
+
+    if ($options->{F}) {
+        $dpy .= $self->get_file_dpy_suffix($dir, $file);
+    }
+
+    if ($get_all_info or $options->{l} or $options->{R}) {
+        # long format
+
+        my $path;
+        if (defined($dir) and $dir ne '') {
+            $path = $dir . '/' . $file;
+        }
+        else {
+            $path = $file;
+        }
+
+        my ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+        if (not $options->{d} and -l $path) {
+            ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)
+                = lstat($path);
+        }
+        else {
+            ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)
+                = stat($path);
+        }
+
+        $file_type = $self->get_type_string($mode);
+        my $perms = $file_type;
+        $perms .= $self->get_perms_string($mode);
+        # $perms = sprintf "%#o", $mode;
+
+        my ($user_name, $group_name);
+
+        if ($options->{n}) {
+            $user_name = $uid;
+            $group_name = $gid;
+        }
+        else {
+            $user_name = (getpwuid($uid))[0];
+            $group_name = (getgrgid($gid))[0];
+        }
+
+        unless (defined($user_name)) {
+            $user_name = $uid;
+        }
+        unless (defined($group_name)) {
+            $group_name = $gid;
+        }
+
+        my $size_dpy;
+        if ($options->{h}) {
+            $size_dpy = $self->get_human_size_display($size);
+        }
+        else {
+            $size_dpy = $size;
+        }
+
+        my $time_dpy;
+        if ($options->{c}) {
+            $time_dpy = $self->get_timestamp_dpy($ctime);
+        }
+        elsif ($options->{u}) {
+            $time_dpy = $self->get_timestamp_dpy($atime);
+        }
+        else {
+            $time_dpy = $self->get_timestamp_dpy($mtime);
+        }
+
+        my $prefix = sprintf "%s %3u %-4s %-4s %5s %s",
+            $perms, $nlink, $user_name, $group_name, $size_dpy, $time_dpy;
+
+        if ($options->{l}) {
+
+            $dpy = $prefix . ' ' . $dpy;
+
+            if ($self->is_symlink($mode)) {
+                # symlink
+
+                my $dest = readlink $path;
+                $dest = '?' unless defined $dest;
+
+                $dpy .= ' -> ' . $dest;
+            }
+        }
+
+        if ($options->{i}) {
+            $dpy = sprintf("%7d %s", $ino, $dpy);
+        }
+
+
+        $info->{mtime} = $mtime;
+        $info->{ctime} = $ctime;
+        $info->{size} = $size;
+        $info->{ino} = $ino;
+        $info->{atime} = $atime;
+
+        if ($options->{xml}) {
+            $dpy = '<entry><file>' . $self->escape_xml($file) . '</file>';
+            foreach my $field (sort keys %$info) {
+                $dpy .= '<' . $field . '>' . $self->escape_xml($info->{$field})
+                    . '</' . $field . '>';
+            }
+            $dpy .= '</entry>';
+        }
+        elsif ($options->{json}) {
+            $dpy = JSON::DWIW->to_json({ file => $file, %$info },
+                                       { bad_char_policy => 'convert' });
+        }
+
+    }
+    else {
+        if ($options->{xml}) {
+            $dpy = '<entry><file>' . $self->escape_xml($file) . '</file></entry>';
+        }
+        elsif ($options->{json}) {
+            $dpy = JSON::DWIW->to_json($file, { bad_char_policy => 'convert' });
+        }
+    }
+
+    $info->{dpy} = $dpy;
+
+    return wantarray ? ($dpy, $info, $file_type): $dpy;
+}
+
+sub is_symlink {
+    my ($self, $mode) = @_;
+
+    my $type_bits = $mode & 0170000;
+    if ($type_bits == 0120000) {
+        return 1;
+    }
+
+    return 0;
+}
+
+sub get_type_string {
+    my ($self, $mode) = @_;
+
+    my $type_bits = $mode & 0170000;
+    my $str = '';
+    if ($type_bits == 0010000) {
+        # fifo
+        $str .= 'p';
+    }
+
+    if ($type_bits == 0020000) {
+        # character special
+        $str .= 'c';
+    }
+
+    if ($type_bits == 0040000) {
+        # directory
+        $str .= 'd';
+    }
+
+    if ($type_bits == 0060000) {
+        # block special
+        $str .= 'b';
+    }
+
+    if ($type_bits == 0100000) {
+        # regular file
+        $str .= '-';
+    }
+
+    if ($type_bits == 0120000) {
+        # symlink
+        $str .= 'l';
+    }
+
+    if ($type_bits == 0140000) {
+        # socket
+        $str .= 's';
+    }
+
+    if ($type_bits == 0160000) {
+        # whiteout
+        $str .= 'w';
+    }
+
+    if ($str eq '') {
+        $str = 'x';
+    }
+
+    return $str;
+}
+
+sub get_timestamp_dpy {
+    my ($self, $unix_ts) = @_;
+
+    my $now = time();
+    $unix_ts = $now unless defined $unix_ts;
+
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime($unix_ts);
+    $year += 1900 if $year < 1900;
+
+    my $dpy_mon = [ 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+                  ]->[$mon];
+
+    $mon++;
+
+    my $dpy = sprintf "%s %2d", $dpy_mon, $mday;
+
+    my $today_year = (localtime($now))[5];
+    $today_year += 1900 if $year < 1900;
+
+    if ($self->{options}{T}) {
+        $dpy .= sprintf " %02d:%02d:%02d %04d", $hour, $min, $sec, $year;
+    }
+    elsif ($self->{options}{unixts}) {
+        $dpy = "$unix_ts";
+    }
+    else {
+        if ($year == $today_year or ($unix_ts <= $now + 86400 and $unix_ts > $now - 180 * 86400) ) {
+            $dpy .= sprintf " %02d:%02d", $hour, $min;
+        }
+        else {
+            $dpy .= sprintf "%6d", $year;
+        }
+
+    }
+    return $dpy;
+}
+
+sub get_human_size_display {
+    my ($self, $size) = @_;
+
+    my $kb = $size / 1024;
+    if ($kb < 1) {
+        return sprintf "%uB", $size;
+    }
+
+    my $mb = $kb / 1024;
+    if ($mb < 1) {
+        return sprintf "%0.1fK", $kb;
+    }
+
+    my $gb = $mb / 1024;
+    if ($gb < 1) {
+        return sprintf "%0.1fM", $mb;
+    }
+
+    my $tb = $gb / 1024;
+    if ($tb < 1) {
+        return sprintf "%0.1fG", $gb;
+    }
+
+    my $pb = $tb / 1024;
+    if ($pb < 1) {
+        return sprintf "%0.1fT", $tb;
+    }
+
+    return sprintf "%0.1fP", $pb;
+
+}
+
+sub get_perms_string {
+    my ($self, $mode) = @_;
+    my $perms = '';
+
+
+    my $perm_bits = $mode & 07777;
+    my $set_uid = ($mode & 0004000);
+    my $set_gid = ($mode & 0002000);
+    my $save_text = ($mode & 0001000);
+
+    my $i = 3;
+    while ($i--) {
+        my $bits = ($perm_bits >> ($i * 3)) & 7;
+        $perms .= ( ($bits & 4) ? 'r' : '-' );
+        $perms .= ( ($bits & 2) ? 'w' : '-' );
+
+        if ( ($i == 2 and $set_uid) or ($i == 1 and $set_gid) ) {
+            $perms .= ( ($bits & 1) ? 's' : 'S' );
+        }
+        elsif ($i == 0 and $save_text) {
+            $perms .= ( ($bits & 1) ? 't' : 'T' );
+        }
+        else {
+            $perms .= ( ($bits & 1) ? 'x' : '-' );
+        }
+    }
+
+    return $perms;
+}
+
+sub get_mode_string {
+    my ($self, $path, $mode) = @_;
+
+    my $options = $self->{options};
+
+    my $str = '';
+    if (not $options->{d} and -l $path) {
+        $str .= 'l';
+    }
+    elsif (-d $path) {
+        $str .= 'd';
+    }
+    else {
+        $str .= '-';
+    }
+
+    return $str;
+}
+
+sub get_partial_mode_string {
+    my ($self, $mode) = @_;
+
+    my $str = '';
+    $str .= ($mode & 4) ? 'r' : '-';
+    $str .= ($mode & 2) ? 'w' : '-';
+    $str .= ($mode & 1) ? 'x' : '-';
+
+    return $str;
+}
+
+sub get_file_dpy_suffix {
+    my ($self, $dir, $file) = @_;
+
+    my $path;
+    if (defined($dir) and $dir ne '') {
+        $path = $dir . '/' . $file;
+    }
+    else {
+        $path = $file;
+    }
+
+    if (-l $path) {
+        return '@';
+    }
+
+    if (-d $path) {
+        return '/';
+    }
+
+    if (-p $path) {
+        return '|';
+    }
+
+    if (-S $path) {
+        return '=';
+    }
+
+    if (-x $path) {
+        return '*';
+    }
+
+    return '';
+}
+
+
+sub escape_xml {
+    my ($self, $text) = @_;
+    return undef unless defined $text;
+
+    $text =~ s/\&/\&amp;/g;
+    $text =~ s/</\&lt;/g;
+    $text =~ s/>/\&gt;/g;
+
+    return $text;
+}
+
+
+sub load_json {
+    my ($self) = @_;
+
+    if ($self->{json_loaded}) {
+        return 1;
+    }
+
+    {
+        local $SIG{__DIE__};
+        eval 'use JSON::DWIW;';
+    }
+
+    if ($@) {
+        $self->{json_loaded} = 0;
+        return 0;
+    }
+
+    $self->{json_loaded} = 1;
+    return 1;
+}
+
+sub get_full_version {
+    my ($self) = @_;
+
+    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+
+    return "$prog " . $VERSION . "\n";
+}
+
+sub get_perl_exec {
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    return $perl;
+}
+
+sub run_self_test {
+    my ($self) = @_;
+
+    my $perl = $self->get_perl_exec;
+    my $me = __FILE__;
+
+    $ENV{DCONFINI_TEST_ACTIVE} = 1;
+
+    (my $sf_me = $me) =~ s/'/\\'/g;
+    my @cmd = ($perl, '-MTest::Harness', '-e', "runtests('$sf_me')");
+
+    exec {$cmd[0]} @cmd;
+
+    exit 0;
+}
+
+sub self_test {
+    my ($self) = @_;
+
+    eval 'use Test::More tests => 1';
+
+    ok(1, "dummy test");
+
+    exit 0;
+}
+
+sub quick_check_options {
+    my ($self, $opts) = @_;
+
+    if ($ENV{HARNESS_ACTIVE} and $ENV{DCONFINI_TEST_ACTIVE}) {
+        $self->self_test;
+        exit 0;
+    }
+
+    if ($opts->{test}) {
+        $self->run_self_test;
+        exit 0;
+    }
+
+    if ($opts->{version}) {
+        print STDERR $self->get_full_version;
+        exit 0;
+    }
+
+    if ($opts->{self_install}) {
+        $self->self_install($opts->{prefix}, $opts->{bindir});
+        exit 0;
+    }
+}
+

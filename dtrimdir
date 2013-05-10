@@ -1,0 +1,337 @@
+#!/usr/local/bin/perl
+
+# Copyright (c) 2013 Don Owens <don@regexguy.com>.  All rights reserved.
+#
+# This software is released under the BSD license:
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+#  * Redistributions in binary form must reproduce the above
+#    copyright notice, this list of conditions and the following
+#    disclaimer in the documentation and/or other materials provided
+#    with the distribution.
+#
+#  * Neither the name of the author nor the names of its
+#    contributors may be used to endorse or promote products derived
+#    from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+# OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+use strict;
+use warnings;
+use Getopt::Long qw(:config no_ignore_case bundling);
+
+our $VERSION = "0.2";
+
+# main
+{
+    my $self = bless { };
+    sub msg;
+    sub out_log;
+
+    my $opts = $self->get_options([ "help|h",
+                                    "version|V",
+                                    "check|dry-run",
+                                    "dir=s",
+                                    "regex|file-regex|file_regex=s",
+                                    "quiet|q",
+                                    "count|keep=i",
+                                    "verbose|v",
+                                    "self_install|selfinstall|self-install",
+                                    "bindir=s",
+                                    "test",
+                                  ], { });
+
+    $self->quick_check_options($opts);
+
+    $self->check_options($opts, [ 'regex',
+                                  'dir',
+                                  'count',
+                                ]); # die's on bad options
+
+    $self->{opts} = $opts;
+    my $prog = $0;
+    $prog =~ s{\A.*/([^/]+)\Z}{$1};
+    $self->{prog} = $prog;
+
+    $self->setup_logging($opts);
+
+    $self->rotate_files();
+}
+
+exit 0;
+
+###############################################################################
+# Subroutines
+
+sub rotate_files {
+    my ($self) = @_;
+
+    my $opts = $self->{opts};
+    my $dir = $opts->{dir};
+    my $re = qr/$opts->{regex}/;
+
+    opendir(my $dh, $dir);
+    unless ($dh) {
+        print STDERR "\n$self->{prog}: couldn't opendir '$opts->{dir}': $!\n";
+        exit 1;
+    }
+
+    my @files = grep { $_ =~ $re and -f "$dir/$_" } readdir $dh;
+
+    closedir $dh;
+
+    $self->_rotate_files(\@files, $dir);
+}
+
+sub _rotate_files {
+    my ($self, $files, $dir) = @_;
+
+    my $opts = $self->{opts};
+
+    my @files = sort @$files;
+
+    my $count = $opts->{count};
+    my $v = $opts->{verbose};
+    if (@files > $count) {
+        my $dir = $opts->{dir};
+        my @to_delete = @files[0 .. $#files - $count];
+        my @paths = map { "$dir/$_" } @to_delete;
+
+        if ($opts->{check}) {
+            msg "would delete the following files: " . join(",", @paths) if $v;
+        }
+        else {
+            msg "deleting the following files: " . join(",", @paths) if $v;
+            foreach my $path (@paths) {
+                if (unlink $path) {
+                    msg "deleted file '$path'" if $v;
+                }
+                else {
+                    msg "failed to delete file '$path': $!" if $v;
+                }
+            }
+        }
+    }
+    else {
+        if ($opts->{verbose}) {
+            msg "no files to rotate";
+        }
+    }
+}
+
+sub quick_check_options {
+    my ($self, $opts) = @_;
+
+    if ($ENV{HARNESS_ACTIVE} and $ENV{DCONFINI_TEST_ACTIVE}) {
+        $self->self_test;
+        exit 0;
+    }
+
+    if ($opts->{test}) {
+        $self->run_self_test;
+        exit 0;
+    }
+
+    if ($opts->{version}) {
+        print STDERR $self->get_full_version;
+        exit 0;
+    }
+
+    if ($opts->{self_install}) {
+        $self->self_install($opts->{prefix}, $opts->{bindir});
+        exit 0;
+    }
+}
+
+########## begin option processing ##########
+sub print_usage {
+    print STDERR qq{\nUsage: @{[ ($0 =~ m{\A.*/([^/]+)\Z})[0] || $0 ]} options
+
+    Options:
+        [--check | --dry-run] # just print what would happen
+        [--dir <dir>]         # directory where files should be deleted
+        [--regex <regexp>]    # regular expression for files to delete
+        [--keep <num_files>]  # number of files to keep
+        [--quiet]             # don't print anything unless there is an error
+        [--verbose]           # be noisy in output
+        [-h | --help]         # this help msg
+\n};
+}
+
+sub check_options {
+    my ($self, $opts, $required) = @_;
+
+    if (not $opts or $opts->{help}) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    my $opt_ok = 1;
+    $required = [ ] unless $required;
+    foreach my $key (@$required) {
+        if (defined($opts->{$key})) {
+            if (my $v = $opts->{$key}) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        unless (@$v) {
+                            $opt_ok = 0;
+                            warn "missing required option '$key'
+";
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            $opt_ok = 0;
+            warn "missing required option '$key'\n";
+        }
+    }
+
+    unless ($opt_ok) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    return $opt_ok;
+}
+
+sub get_options {
+    my ($self, $spec, $defaults) = @_;
+    my %opts = $defaults ? %$defaults : ();
+    $spec = [ ] unless $spec;
+
+    my $process_opt = sub {
+        my ($key, $val) = @_;
+
+        if (scalar(@_) > 2) {
+            $opts{$key}{$val} = $_[2];
+        }
+        else {
+            if ( exists($opts{$key}) and (my $v = $opts{$key}) ) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        push @{ $opts{$key} }, $val;
+                        return 1;
+                    }
+                }
+            }
+
+            $opts{$key} = $val;
+        }
+    };
+
+    my $opt_rv = Getopt::Long::GetOptions(map { ($_ => $process_opt) } @$spec);
+
+    return $opt_rv ? \%opts : undef;
+}
+########## end option processing ##########
+
+sub setup_logging {
+    my ($self, $opts) = @_;
+
+    my $quiet = $opts->{quiet};
+
+    my $msg = sub {
+        return 0 if $quiet;
+        my ($fmt, @rest) = @_;
+
+        my ($sec,$min,$hour,$mday,$mon,$year) = localtime();
+        $year += 1900 if $year < 1900;
+        $mon++;
+
+        my $ts = sprintf "%04d-%02d-%02dT%02d:%02d:%02d", $year, $mon,
+            $mday, $hour, $min, $sec;
+
+
+        printf STDERR "$ts $fmt\n", @rest;
+    };
+
+    my $log_fh;
+    if ($opts->{log}) {
+        open($log_fh, '>>', $opts->{log})
+            or die "couldn't open log file '$opts->{log}' for output";
+        select((select($log_fh), $| = 1)[0]);
+    }
+
+    my $out_log = sub {
+        my ($fmt, @rest) = @_;
+        return 0 unless $log_fh;
+
+        my ($sec,$min,$hour,$mday,$mon,$year) = localtime();
+        $year += 1900 if $year < 1900;
+        $mon++;
+
+        my $ts = sprintf "%04d-%02d-%02dT%02d:%02d:%02d", $year, $mon,
+            $mday, $hour, $min, $sec;
+
+        # print $log_fh "$ts ", join(' ', @_) . "\n";
+        printf $log_fh "$ts " . $fmt . "\n", @rest;
+    };
+
+    *msg = $msg;
+    *out_log = $out_log;
+}
+
+sub get_full_version {
+    my ($self) = @_;
+
+    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+
+    return "$prog " . $VERSION . "\n";
+}
+
+sub get_perl_exec {
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    return $perl;
+}
+
+sub run_self_test {
+    my ($self) = @_;
+
+    my $perl = $self->get_perl_exec;
+    my $me = __FILE__;
+
+    $ENV{DCONFINI_TEST_ACTIVE} = 1;
+
+    (my $sf_me = $me) =~ s/'/\\'/g;
+    my @cmd = ($perl, '-MTest::Harness', '-e', "runtests('$sf_me')");
+
+    exec {$cmd[0]} @cmd;
+
+    exit 0;
+}
+
+sub self_test {
+    my ($self) = @_;
+
+    eval 'use Test::More tests => 1';
+
+    ok(1, "dummy test");
+
+    exit 0;
+}
