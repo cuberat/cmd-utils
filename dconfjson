@@ -424,7 +424,7 @@ sub self_install {
         exit 1;
     }
 
-    my $new_path = "$bin_dir/dconfini";
+    my $new_path = "$bin_dir/djoinstr";
 
     open(my $in_fh, '<', $script) or
         die "couldn't open script source '$script'";
