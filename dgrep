@@ -1,0 +1,456 @@
+#!/usr/local/bin/perl
+
+# Copyright (c) 2012-2013 Don Owens <don@regexguy.com>.  All rights reserved.
+#
+# This software is released under the BSD license:
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+#  * Redistributions in binary form must reproduce the above
+#    copyright notice, this list of conditions and the following
+#    disclaimer in the documentation and/or other materials provided
+#    with the distribution.
+#
+#  * Neither the name of the author nor the names of its
+#    contributors may be used to endorse or promote products derived
+#    from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+# OF THE POSSIBILITY OF SUCH DAMAGE.
+
+use strict;
+use Carp;
+use Getopt::Long qw(:config no_ignore_case bundling);
+use File::Find;
+
+our $VERSION = "0.3";
+
+# main
+{
+    # local($SIG{__DIE__}) = sub { &Carp::confess };
+    my $self = bless { };
+
+    my $opts = $self->get_options([ "help",
+                                    "version|V",
+                                    "count|c",
+                                    "line_number|line-number|n",
+                                    "group|g=i",
+                                    "int_buckets|intbuckets|int-buckets=s",
+                                    "bucket_cmp|bucketcmp|bucket-cmp=s",
+                                    "invert-match|v",
+                                    "no-filename|h",
+                                    "color|colour",
+                                    "ignore-case|i",
+                                    "byte-offset|b",
+                                    "files-without-match|L",
+                                    "files-with-matches|l",
+                                    "recursive|r",
+                                    "self_install|selfinstall|self-install",
+                                    "prefix=s",
+                                    "bindir=s",
+                                  ], { });
+    $self->check_options($opts, [ ]); # die's on bad options
+
+    if ($opts->{version}) {
+        print STDERR $self->get_full_version;
+        exit 0;
+    }
+
+    $self->{opts} = $opts;
+
+    if ($opts->{self_install}) {
+        $self->self_install($opts->{prefix}, $opts->{bindir});
+        exit 0;
+    }
+
+    if (@ARGV < 1) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    $self->setup_config;
+
+    $self->{total_count} = 0;
+    $self->{groups} = { };
+    my $regex = shift;
+    if (@ARGV) {
+        foreach my $file (@ARGV) {
+            $self->do_grep($regex, $file, 1);
+        }
+    }
+    else {
+        $self->do_grep($regex, '-', 0);
+    }
+
+    if ($opts->{count}) {
+        print "$self->{total_count}\n";
+    }
+    elsif ($opts->{group}) {
+        my $sort = $self->get_sort;
+        foreach my $group (sort { $sort->($a, $b) } keys %{$self->{groups}}) {
+            print "$group: $self->{groups}{$group}\n";
+        }
+    }
+}
+
+exit 0;
+
+###############################################################################
+# Subroutines
+
+sub get_sort {
+    my ($self) = @_;
+
+    if (defined $self->{opts}{int_buckets}) {
+        return sub { $_[0] <=> $_[1] };
+    }
+    else {
+        return sub { $_[0] cmp $_[1] };
+    }
+}
+
+sub setup_config {
+    my ($self) = @_;
+    my $opts = $self->{opts};
+
+    if (defined $opts->{int_buckets}) {
+        unless (defined $opts->{bucket_cmp}) {
+            $opts->{bucket_cmp} = '<=';
+        }
+
+        my $cmp = $opts->{bucket_cmp};
+        my $cmp_func = eval qq{ sub { \$_[0] $cmp \$_[1] } };
+
+        if ($opts->{int_buckets} =~ /(-?\d+)-(-?\d+)/) {
+            my ($start, $end) = $1 > $2 ? ($2, $1) : ($1, $2);
+            $self->{int_bucket_start} = $start;
+            $self->{int_bucket_end} = $end;
+
+            $self->{bucket_cmp_func} = sub {
+                my ($val) = @_;
+                for my $i ($start .. $end) {
+                    if ($cmp_func->($val, $i)) {
+                        $self->{groups}{$i}++;
+                    }
+                }
+            };
+
+        }
+        elsif ($opts->{int_buckets} =~ /(\d+),(\d+)/) {
+            my @buckets = sort { $a <=> $b } split /,/, $opts->{int_buckets};
+            $self->{intbucket_list} = \@buckets;
+
+            $self->{bucket_cmp_func} = sub {
+                my ($val) = @_;
+                for my $i (@buckets) {
+                    if ($cmp_func->($val, $i)) {
+                        $self->{groups}{$i}++;
+                    }
+                }
+            };
+
+        }
+        else {
+            die "unrecogized intbucket spec '$self->{int_buckets}'";
+        }
+
+    }
+}
+
+sub find_process {
+    my ($self, $regex) = @_;
+
+    return 1 if -d $File::Find::name;
+
+    return $self->do_grep($regex, $File::Find::name, 1);
+
+    # print "file=$File::Find::name -- dir=$File::Find::dir\n";
+}
+
+sub do_grep {
+    my ($self, $regex, $file, $multiple_files) = @_;
+
+    my $opts = $self->{opts};
+    my $in_fh;
+    if ($file eq '-') {
+        $in_fh = *STDIN;
+    }
+    elsif ($opts->{recursive} and -d $file) {
+        my $process = sub { $self->find_process($regex) };
+        find({ no_chdir => 1, wanted => $process }, $file);
+    }
+    else {
+        open($in_fh, '<', $file) or die "couldn't open file '$file' for input";
+    }
+
+    my $line;
+    my $line_num = 0;
+    my $do_byte_offset = $opts->{'byte-offset'};
+
+    if (defined $opts->{group}) {
+        while ($line = <$in_fh>) {
+            my $re;
+            if ($opts->{'ignore-case'}) {
+                $re = qr/$regex/i;
+            }
+            else {
+                $re = qr/$regex/;
+            }
+
+            if (my @groups = ($line =~ $re)) {
+                my $val;
+                if ($opts->{group} == 0) {
+                    $val = $&;
+                }
+                else {
+                    my $index = $opts->{group} - 1;
+                    $val = $groups[$index];
+                }
+
+                if (defined $self->{bucket_cmp_func}) {
+                     $self->{bucket_cmp_func}->($val);
+                }
+                else {
+                    $self->{groups}{$val}++;
+                }
+            }
+        }
+    }
+    else {
+        my $byte_offset;
+        my $new_byte_offset;
+
+        if ($do_byte_offset) {
+            $new_byte_offset = tell($in_fh);
+        }
+
+        my $this_count = 0;
+        while ($line = <$in_fh>) {
+            $line_num++;
+            if ($do_byte_offset) {
+                $byte_offset = $new_byte_offset;
+                $new_byte_offset = tell($in_fh);
+            }
+            my $match;
+
+            my $re;
+            if ($opts->{'ignore-case'}) {
+                $re = qr/$regex/i;
+            }
+            else {
+                $re = qr/$regex/;
+            }
+
+            if ($opts->{color}) {
+                my $color_on = "\033[1;31m";
+                my $color_off = "\033[0;39m";
+                $match = ($line =~ s/$re/$color_on$&$color_off/g);
+            }
+            else {
+                $match = ($line =~ /$re/);
+            }
+
+            if (($match and not $opts->{'invert-match'})
+                or (not $match and $opts->{'invert-match'})) {
+                $self->{total_count}++;
+                $this_count++;
+                unless ($opts->{count}) {
+                    if ($opts->{'files-with-matches'}) {
+                        $self->out_line(*STDOUT, '', "$file\n");
+                        last;
+                    }
+                    elsif ($opts->{'files-without-match'}) {
+                        # do nothing
+                    }
+                    else {
+                        my $pre = '';
+                        $pre .= "$file:" if $multiple_files and not $opts->{'no-filename'};
+                        $pre .= "$line_num:" if $opts->{line_number};
+                        $pre .= "$byte_offset:" if $do_byte_offset;
+                        $self->out_line(*STDOUT, $pre, $line);
+                    }
+                }
+            }
+        }
+
+        if ($opts->{'files-without-match'} and $this_count == 0) {
+            $self->out_line(*STDOUT, '', "$file\n");
+        }
+    }
+}
+
+sub out_line {
+    my ($self, $out_fh, $pre_str, $str) = @_;
+
+    print $out_fh $pre_str;
+    print $out_fh $str;
+}
+
+########## begin option processing ##########
+sub print_usage {
+    print STDERR qq{\nUsage: @{[ ($0 =~ m{\A.*/([^/]+)\Z})[0] || $0 ]} options <regex> [<file>...]
+
+    Options:
+        [-c | --count]       # suppress normal output; insted print count of
+                             # matching lines for each input file
+        [-n | --line-number] # prefix each output line with the line number
+                             # within its input file
+        [-g N | --group=N]   # group counts on match number N
+        [--int-buckets=STR]  # group counts into buckets specified by STR
+        [--bucket-cmp=STR]   # comparison used to place counts into buckets,
+                             # e.g, <=
+        [-c | --invert-match ] # invert the sense of matching -- select
+                               # non-matching lines
+        [-h | --no-filename ]  # suppress prefixing of filenames on output
+                               # when searching multiple files
+        [--color|--colour]  # color the matched string
+        [-i|--ignore-case]  # ignore case distinctions in pattern and input
+                            # data
+        [-b|--byte-offset]  # print the byte offset within the input file
+                            # before each line of output
+        [-L|files-without-match]
+        [-l|files-with-matches]
+        [-r|recursive]      # read all files under each directory, recursively
+        [--help]            # this help msg
+\n};
+}
+
+sub check_options {
+    my ($self, $opts, $required) = @_;
+
+    if (not $opts or $opts->{help}) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    my $opt_ok = 1;
+    $required = [ ] unless $required;
+    foreach my $key (@$required) {
+        if (defined($opts->{$key})) {
+            if (my $v = $opts->{$key}) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        unless (@$v) {
+                            $opt_ok = 0;
+                            warn "missing required option '$key'
+";
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            $opt_ok = 0;
+            warn "missing required option '$key'\n";
+        }
+    }
+
+    unless ($opt_ok) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    return $opt_ok;
+}
+
+sub get_options {
+    my ($self, $spec, $defaults) = @_;
+    my %opts = $defaults ? %$defaults : ();
+    $spec = [ ] unless $spec;
+
+    my $process_opt = sub {
+        my ($key, $val) = @_;
+
+        if (scalar(@_) > 2) {
+            $opts{$key}{$val} = $_[2];
+        }
+        else {
+            if ( exists($opts{$key}) and (my $v = $opts{$key}) ) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        push @{ $opts{$key} }, $val;
+                        return 1;
+                    }
+                }
+            }
+
+            $opts{$key} = $val;
+        }
+    };
+
+    my $opt_rv = Getopt::Long::GetOptions(map { ($_ => $process_opt) } @$spec);
+
+    return $opt_rv ? \%opts : undef;
+}
+########## end option processing ##########
+
+sub self_install {
+    my ($self, $prefix, $bin_dir) = @_;
+
+    unless (defined $prefix or defined $bin_dir) {
+        $bin_dir = '/usr/local/bin';
+    }
+
+    $bin_dir = "$prefix/bin" unless defined $bin_dir;
+
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    my $script = __FILE__;
+
+    unless (-w $bin_dir) {
+        print STDERR "\ndconfini: can't write to $bin_dir.  ";
+        print STDERR "Maybe you need to run me as root?\n\n";
+        exit 1;
+    }
+
+    my $new_path = "$bin_dir/dgrep";
+
+    open(my $in_fh, '<', $script) or
+        die "couldn't open script source '$script'";
+    my $line;
+
+    open(my $out_fh, '>', $new_path)
+        or die "couldn't open output file $new_path";
+
+    $line = <$in_fh>; # eat shebang line
+    print $out_fh "#!$perl\n";
+
+    while ($line = <$in_fh>) {
+        print $out_fh $line;
+    }
+
+    close $out_fh;
+    close $in_fh;
+
+    chmod 0755, $new_path;
+
+    print STDERR "Installed as $new_path\n";
+}
+
+sub get_full_version {
+    my ($self) = @_;
+
+    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+
+    return "$prog " . $VERSION . "\n";
+}
