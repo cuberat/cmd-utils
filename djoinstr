@@ -1,0 +1,279 @@
+#!/usr/local/bin/perl
+
+# Copyright (c) 2012-2013 Don Owens <don@regexguy.com>.  All rights reserved.
+#
+# This software is released under the BSD license:
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+
+#  * Redistributions in binary form must reproduce the above
+#    copyright notice, this list of conditions and the following
+#    disclaimer in the documentation and/or other materials provided
+#    with the distribution.
+#
+#  * Neither the name of the author nor the names of its
+#    contributors may be used to endorse or promote products derived
+#    from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+# OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#    Accepts fields either from standard input (in which case --is
+#    should be used) or on the command line (each argument is one field).
+
+#     Example:
+#
+#     >$ echo -n "foo|bar|stuff" | djoinstr --is \\| --prefix '(' --postfix ')'
+#     (foo,bar,stuff)
+#     >$
+
+use strict;
+use warnings;
+use Getopt::Long qw(:config no_ignore_case bundling);
+
+our $VERSION = "0.3";
+
+# main
+{
+    my $self = bless { };
+
+    my $opts = $self->get_options([ "help|h",
+                                    "version|V",
+                                    "os=s",
+                                    "is=s",
+                                    "prefix=s",
+                                    "postfix=s",
+                                    "self_install|selfinstall|self-install",
+                                    "bindir=s",
+                                  ], { os => ',', is => "\n" });
+    $self->check_options($opts, [ 'is', 'os' ]); # die's on bad options
+
+    if ($opts->{version}) {
+        print STDERR $self->get_full_version;
+        exit 0;
+    }
+
+    if ($opts->{self_install}) {
+        $self->self_install($opts->{prefix}, $opts->{bindir});
+        exit 0;
+    }
+
+
+    $self->{opts} = $opts;
+
+    my $os = $opts->{os};
+    my $out_fh = *STDOUT;
+
+    my $get_next = $self->build_next_func(\@ARGV);
+
+    my $first = 1;
+    my $arg;
+    if (defined $opts->{prefix}) {
+        print $out_fh $opts->{prefix};
+    }
+
+    while (defined($arg = $get_next->())) {
+        if (not $first) {
+            print $out_fh $os;
+        }
+
+        print $out_fh $arg;
+
+        $first = 0;
+    }
+
+    if (defined $opts->{postfix}) {
+        print $opts->{postfix};
+    }
+
+    print $out_fh "\n";
+}
+
+exit 0;
+
+###############################################################################
+# Subroutines
+
+sub build_next_func {
+    my ($self, $argv) = @_;
+
+    my $get_next;
+    if (@$argv) {
+        $get_next = sub { return shift @$argv };
+    } else {
+        my $is = $self->{opts}{is};
+        my $sf_is = quotemeta($self->{opts}{is});
+
+        $get_next = sub {
+            local ($/) = $is;
+            my $arg = <STDIN>;
+            return undef unless defined $arg;
+
+            $arg =~ s/$sf_is$//;
+            return $arg;
+        }
+    }
+}
+
+########## begin option processing ##########
+sub print_usage {
+    print STDERR qq{\nUsage: @{[ ($0 =~ m{\A.*/([^/]+)\Z})[0] || $0 ]} options [<fields>...]
+
+    Accepts fields either from standard input (in which case --is
+    should be used) or on the command line (each argument is one field).
+
+    Options:
+        --is <input_sep>  # input field separator for when using standard input
+                          # (defaults to line feed)
+        --os <output_sep> # output field separator (defaults to comma)
+        --prefix <str>    # string with which to prefix the output
+        --postfix <str>   # string with which to postfix the output
+        [-h | --help]     # this help msg
+
+    Example:
+
+        >\$ echo -n "foo|bar|stuff" | djoinstr --is \\| --prefix '(' --postfix ')'
+        (foo,bar,stuff)
+        >\$
+\n};
+}
+
+sub check_options {
+    my ($self, $opts, $required) = @_;
+
+    if (not $opts or $opts->{help}) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    my $opt_ok = 1;
+    $required = [ ] unless $required;
+    foreach my $key (@$required) {
+        if (defined($opts->{$key})) {
+            if (my $v = $opts->{$key}) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        unless (@$v) {
+                            $opt_ok = 0;
+                            warn "missing required option '$key'
+";
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            $opt_ok = 0;
+            warn "missing required option '$key'\n";
+        }
+    }
+
+    unless ($opt_ok) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    return $opt_ok;
+}
+
+sub get_options {
+    my ($self, $spec, $defaults) = @_;
+    my %opts = $defaults ? %$defaults : ();
+    $spec = [ ] unless $spec;
+
+    my $process_opt = sub {
+        my ($key, $val) = @_;
+
+        if (scalar(@_) > 2) {
+            $opts{$key}{$val} = $_[2];
+        }
+        else {
+            if ( exists($opts{$key}) and (my $v = $opts{$key}) ) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        push @{ $opts{$key} }, $val;
+                        return 1;
+                    }
+                }
+            }
+
+            $opts{$key} = $val;
+        }
+    };
+
+    my $opt_rv = Getopt::Long::GetOptions(map { ($_ => $process_opt) } @$spec);
+
+    return $opt_rv ? \%opts : undef;
+}
+########## end option processing ##########
+
+sub get_full_version {
+    my ($self) = @_;
+
+    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+
+    return "$prog " . $VERSION . "\n";
+}
+
+sub self_install {
+    my ($self, $prefix, $bin_dir) = @_;
+
+    unless (defined $prefix or defined $bin_dir) {
+        $bin_dir = '/usr/local/bin';
+    }
+
+    $bin_dir = "$prefix/bin" unless defined $bin_dir;
+
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    my $script = __FILE__;
+
+    unless (-w $bin_dir) {
+        print STDERR "\ndconfini: can't write to $bin_dir.  ";
+        print STDERR "Maybe you need to run me as root?\n\n";
+        exit 1;
+    }
+
+    my $new_path = "$bin_dir/djoinstr";
+
+    open(my $in_fh, '<', $script) or
+        die "couldn't open script source '$script'";
+    my $line;
+
+    open(my $out_fh, '>', $new_path)
+        or die "couldn't open output file $new_path";
+
+    $line = <$in_fh>; # eat shebang line
+    print $out_fh "#!$perl\n";
+
+    while ($line = <$in_fh>) {
+        print $out_fh $line;
+    }
+
+    close $out_fh;
+    close $in_fh;
+
+    chmod 0755, $new_path;
+
+    print STDERR "Installed as $new_path\n";
+}
