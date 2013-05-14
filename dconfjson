@@ -41,7 +41,7 @@ use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
 use Data::Dumper ();
 
-our $VERSION = "0.1";
+our $VERSION = "0.2";
 
 # main
 {
@@ -50,6 +50,7 @@ our $VERSION = "0.1";
     my $opts = $self->get_options([ "help|h",
                                     "version|V",
                                     "in_file|infile|i|conf|conffile|conf-file|file|c=s",
+                                    "stdin",
                                     "out_file|outfile|o=s",
                                     "field|f=s",
                                     "is=s",
@@ -59,7 +60,7 @@ our $VERSION = "0.1";
                                     "self_install|selfinstall|self-install",
                                     "prefix=s",
                                     "bindir=s",
-                                    "test",
+                                    "test|self-test",
                                   ], { });
     $self->check_options($opts, [ ]); # die's on bad options
 
@@ -90,13 +91,13 @@ our $VERSION = "0.1";
         exit 0;
     }
 
-    unless (defined $opts->{in_file}) {
+    unless (defined $opts->{in_file} or $opts->{stdin}) {
         unless (@ARGV > 0) {
-            print STDERR "dconfjson: 'out_file' option required\n";
+            print STDERR "dconfjson: 'in_file' option required\n";
             exit 1;
         }
 
-        $opts->{out_file} = shift @ARGV;
+        $opts->{in_file} = shift @ARGV;
     }
 
     unless (defined $opts->{field}) {
@@ -169,9 +170,26 @@ sub extract_field {
 
     my $data = $conf;
     for my $f (@hier) {
-        return undef unless defined $data and UNIVERSAL::isa($data, 'HASH');
+        if ($f =~ /^\[(-?\d+)\]$/) {
+            my $index = $1;
+            return undef unless defined $data
+                and UNIVERSAL::isa($data, 'ARRAY');
+            if ($index < 0) {
+                my $new_index = scalar(@$data) - $index;
+                if ($new_index < 0) {
+                    $new_index = 0;
+                }
 
-        $data = $data->{$f};
+                $index = $new_index;
+            }
+
+            $data = $data->[$index];
+        }
+        else {
+            return undef unless defined $data
+                and UNIVERSAL::isa($data, 'HASH');
+            $data = $data->{$f};
+        }
     }
 
     return $data;
@@ -254,11 +272,14 @@ sub run_self_test {
 sub self_test {
     my ($self) = @_;
 
-    eval 'use Test::More tests => 4';
+    eval 'use Test::More tests => 5';
 
     ok(1, "dummy test");
 
     my $conf_str = qq{{"stuff": 3, "db": { "foo": { "bar": "stuff" }, "more": 1, "stuff": 2 } }
+};
+
+    my $conf_str2 = qq{["foo", {"stuff": 3, "db": { "foo": { "bar": "stuff" }, "more": 1, "stuff": 2 } }]
 };
 
     my $out_str = '';
@@ -287,7 +308,7 @@ sub self_test {
 
     is($out_str, 'stuff', "deeper level");
 
-        $out_str = '';
+    $out_str = '';
     undef $in_fh;
     undef $out_fh;
     open($in_fh, '<', \$conf_str)
@@ -300,6 +321,20 @@ sub self_test {
     close $out_fh;
 
     is($out_str, '3', "global level");
+
+    $out_str = '';
+    undef $in_fh;
+    undef $out_fh;
+    open($in_fh, '<', \$conf_str2)
+        or die "couldn't create filehandle for string";
+    open($out_fh, '>', \$out_str);
+
+    $self->do_main({ }, $in_fh, '[1].db.foo.bar', $out_fh);
+
+    close $in_fh;
+    close $out_fh;
+
+    is($out_str, 'stuff', "deeper level with array access");
 
 }
 
