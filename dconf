@@ -79,7 +79,7 @@ our $VERSION = "0.2";
     }
 
     if ($opts->{self_install}) {
-        $self->self_install($opts->{prefix}, $opts->{bindir});
+        $self->self_install($opts->{prefix}, $opts->{bindir}, 'dconf');
         exit 0;
     }
 
@@ -618,7 +618,7 @@ sub get_full_version {
 }
 
 sub self_install {
-    my ($self, $prefix, $bin_dir) = @_;
+    my ($self, $prefix, $bin_dir, $prog_name) = @_;
 
     unless (defined $prefix or defined $bin_dir) {
         $bin_dir = '/usr/local/bin';
@@ -636,12 +636,12 @@ sub self_install {
     my $script = __FILE__;
 
     unless (-w $bin_dir) {
-        print STDERR "\ndconfini: can't write to $bin_dir.  ";
+        print STDERR "\n$prog_name: can't write to $bin_dir.  ";
         print STDERR "Maybe you need to run me as root?\n\n";
         exit 1;
     }
 
-    my $new_path = "$bin_dir/djoinstr";
+    my $new_path = "$bin_dir/$prog_name";
 
     open(my $in_fh, '<', $script) or
         die "couldn't open script source '$script'";
