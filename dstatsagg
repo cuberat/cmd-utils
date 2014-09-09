@@ -157,7 +157,7 @@ sub write_aggregated {
     else {
         my $count = keys %$data; # make sure iterator is reset
         while (my ($index, $d) = each %$data) {
-            $self->out_one($out_fh, $index, $data, $opts);
+            $self->out_one($out_fh, $index, $d, $opts);
         }
     }
 }
@@ -220,7 +220,9 @@ sub init {
             or die "$0: couldn't open input file '$opts->{infile}'";
     }
     else {
-        $in_fh = $self->{in_fh} // *STDIN;
+        unless ($opts->{focl}) {
+            $in_fh = $self->{in_fh} // *STDIN;
+        }
     }
 
     if (defined $opts->{outfile}) {
