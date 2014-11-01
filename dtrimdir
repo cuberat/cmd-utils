@@ -1,6 +1,6 @@
 #!/usr/local/bin/perl
 
-# Copyright (c) 2013 Don Owens <don@regexguy.com>.  All rights reserved.
+# Copyright (c) 2013-2014 Don Owens <don@regexguy.com>.  All rights reserved.
 #
 # This software is released under the BSD license:
 #
@@ -53,6 +53,7 @@ our $VERSION = "0.2";
                                     "regex|file-regex|file_regex=s",
                                     "quiet|q",
                                     "count|keep=i",
+                                    "move=s",
                                     "verbose|v",
                                     "self_install|selfinstall|self-install",
                                     "bindir=s",
@@ -101,6 +102,26 @@ sub rotate_files {
     $self->_rotate_files(\@files, $dir);
 }
 
+sub delete_file {
+    my ($self, $file) = @_;
+
+    return unlink $file;
+}
+
+sub move_file {
+    my ($self, $file) = @_;
+
+    my $dest_dir = $self->{opts}{move};
+    my @cmd = ('/bin/mv', $file, $dest_dir . '/');
+    if (system {$cmd[0]} @cmd) {
+        printf STDERR "\n%s: couldn't move file '%s' to '%s': %s\n",
+            $self->{prog}, $file, $dest_dir, $? . '';
+        exit 1;
+    }
+
+    return 1;
+}
+
 sub _rotate_files {
     my ($self, $files, $dir) = @_;
 
@@ -115,17 +136,29 @@ sub _rotate_files {
         my @to_delete = @files[0 .. $#files - $count];
         my @paths = map { "$dir/$_" } @to_delete;
 
-        if ($opts->{check}) {
-            msg "would delete the following files: " . join(",", @paths) if $v;
+        my $act = $opts->{move} ? 'move' : 'delete';
+        my $acting = $opts->{move} ? 'moving' : 'deleting';
+        my $acted = $opts->{move} ? 'moved' : 'deleted';
+
+        my $doit;
+        if ($opts->{move}) {
+            $doit = sub { $self->move_file($_[0]) };
         }
         else {
-            msg "deleting the following files: " . join(",", @paths) if $v;
+            $doit = sub { $self->delete_file($_[0]) };
+        }
+
+        if ($opts->{check}) {
+            msg "would $act the following files: " . join(",", @paths) if $v;
+        }
+        else {
+            msg "$acting the following files: " . join(",", @paths) if $v;
             foreach my $path (@paths) {
-                if (unlink $path) {
-                    msg "deleted file '$path'" if $v;
+                if ($doit->($path)) {
+                    msg "$acted file '$path'" if $v;
                 }
                 else {
-                    msg "failed to delete file '$path': $!" if $v;
+                    msg "failed to $act file '$path': $!" if $v;
                 }
             }
         }
@@ -170,6 +203,7 @@ sub print_usage {
         [--dir <dir>]         # directory where files should be deleted
         [--regex <regexp>]    # regular expression for files to delete
         [--keep <num_files>]  # number of files to keep
+        [--move <dir>]        # move to given directory instead of deleting
         [--quiet]             # don't print anything unless there is an error
         [--verbose]           # be noisy in output
         [-h | --help]         # this help msg
