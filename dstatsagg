@@ -37,6 +37,8 @@ use strict;
 use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
 
+our $VERSION = "0.2";
+
 # main
 {
     my $self = bless { };
@@ -49,7 +51,9 @@ use Getopt::Long qw(:config no_ignore_case bundling);
                                     "labelsep|label-sep|label-del|ls|ld=s",
                                     "sortstats|sort-stats",
                                     "sort",
+                                    "summary",
                                     "test|self-test",
+                                    "version|V",
                                     "self_install|self-install",
                                     "focl",
                                   ], { });
@@ -62,6 +66,11 @@ use Getopt::Long qw(:config no_ignore_case bundling);
 
     if ($opts->{self_install}) {
         $self->self_install($opts->{prefix}, $opts->{bindir}, 'dstatsagg');
+    }
+
+    if ($opts->{version}) {
+        print STDERR $self->get_full_version;
+        exit 0;
     }
 
     my $required_fields = [ 'indexsep', 'pairsep', 'labelsep' ];
@@ -149,6 +158,19 @@ sub process_one {
 sub write_aggregated {
     my ($self, $out_fh, $opts, $data) = @_;
 
+    if ($opts->{summary}) {
+        my $summary = { };
+        my $count = keys %$data; # make sure iterator is reset
+        while (my ($index, $d) = each %$data) {
+            foreach my $k (keys %$d) {
+                $summary->{$k} += $d->{$k};
+            }
+        }
+
+        $self->out_summary($out_fh, $summary, $opts);
+
+        return 1;
+    }
     if ($opts->{sort}) {
         foreach my $index (sort keys %$data) {
             $self->out_one($out_fh, $index, $data->{$index}, $opts);
@@ -160,6 +182,17 @@ sub write_aggregated {
             $self->out_one($out_fh, $index, $d, $opts);
         }
     }
+}
+
+sub out_summary {
+    my ($self, $out_fh, $data, $opts) = @_;
+
+    my $ls = $opts->{labelsep};
+    my $d = $data;
+    my $stats = join($opts->{pairsep},
+                     map { sprintf "%s%s%s", $_, $ls, $d->{$_} } sort keys %$d);
+    printf $out_fh "%s\n", $stats;
+
 }
 
 sub process_one_file {
@@ -367,6 +400,14 @@ sub self_install {
     print STDERR "Installed as $new_path\n";
 }
 
+sub get_full_version {
+    my ($self) = @_;
+
+    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+
+    return "$prog " . $VERSION . "\n";
+}
+
 ########## begin option processing ##########
 sub print_usage {
     print STDERR qq{\nUsage: @{[ ($0 =~ m{\A.*/([^/]+)\Z})[0] || $0 ]} options
@@ -379,7 +420,9 @@ sub print_usage {
         [--ld | label-del <del>]   # label delimiter
         [--sort-stats]             # sort stats pairs in output
         [--sort]                   # sort by index in output
+        [--summary]                # summarize the data over all index values
         [--test]                   # run self test
+        [--version|V]              # print out the version number
         [--focl]                   # input file names are on the cmd line
         [-h | --help]              # this help msg
 \n};
