@@ -1,6 +1,6 @@
 #!/usr/local/bin/perl
 
-# Copyright (c) 2014 Don Owens <don@regexguy.com>.  All rights reserved.
+# Copyright (c) 2014-2015 Don Owens <don@regexguy.com>.  All rights reserved.
 #
 # This software is released under the BSD license:
 #
@@ -36,8 +36,9 @@
 use strict;
 use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
+use File::Temp;
 
-our $VERSION = "0.2";
+our $VERSION = "0.3";
 
 # main
 {
@@ -49,12 +50,14 @@ our $VERSION = "0.2";
                                     "indexsep|index-sep|indexdel|index-del|is|id=s",
                                     "pairsep|pair-sep|pair-del|ps|pd=s",
                                     "labelsep|label-sep|label-del|ls|ld=s",
+                                    "split=i",
                                     "sortstats|sort-stats",
                                     "sort",
                                     "summary",
                                     "test|self-test",
                                     "version|V",
                                     "self_install|self-install",
+                                    "tmpdir|tmp-dir=s",
                                     "focl",
                                   ], { });
 
@@ -151,7 +154,7 @@ sub process_one {
 
     my $data = { };
 
-    $self->process_one_file($in_fh, $data, $is_re, $ps_re, $ls_re);
+    $self->process_one_file($in_fh, $data, $is_re, $ps_re, $ls_re, $out_fh);
     $self->write_aggregated($out_fh, $opts, $data);
 }
 
@@ -196,19 +199,42 @@ sub out_summary {
 }
 
 sub process_one_file {
-    my ($self, $in_fh, $data, $is_re, $ps_re, $ls_re) = @_;
+    my ($self, $in_fh, $data, $is_re, $ps_re, $ls_re, $out_fh) = @_;
 
     my $line;
+    my $split = $self->{opts}{split};
+    my $count = 0;
+    my $last_index = '';
+    my $check_index = 0;
+
+    if ($split) {
+        $in_fh = $self->sort_file_handle($in_fh);
+    }
+
     while ($line = <$in_fh>) {
         chomp $line;
 
+        if ($split and $count >= $split) {
+            $check_index = 1;
+        }
+
         my ($index, $stats_str) = split $is_re, $line;
+        if ($check_index) {
+            unless ($index eq $last_index) {
+                $self->write_aggregated($out_fh, $self->{opts}, $data);
+                %$data = ();
+                $check_index = 0;
+                $count = 0;
+            }
+        }
+        $last_index = $index;
         my $d = $data->{$index};
         $data->{$index} = $d = { } unless defined $d;
         foreach my $pair (split($ps_re, $stats_str)) {
             my ($k, $v) = split $ls_re, $pair;
             $d->{$k} += $v;
         }
+        $count++;
     }
 
 }
@@ -221,6 +247,39 @@ sub process {
     my $out_fh = $self->{out_fh};
 
     $self->process_one($opts, $in_fh, $out_fh);
+}
+
+sub get_tmp_file {
+    my ($self) = @_;
+
+    my @args;
+    if ($self->{opts}{tmpdir}) {
+        push @args, DIR => $self->{opts}{tmpdir};
+    }
+
+    push @args, UNLINK => 1;
+    push @args, TEMPLATE => "dstatsagg_XXXXXX";
+    my $tmp_fh = File::Temp->new(@args);
+    return wantarray ? ($tmp_fh, $tmp_fh . '') : $tmp_fh;
+}
+
+sub sort_file_handle {
+    my ($self, $in_fh) = @_;
+
+    my ($tmp_fh, $filename) = $self->get_tmp_file;
+    my $sort = '/usr/bin/sort';
+    my @cmd = ($sort, '-t', $self->{opts}{indexsep}, '-k', '1',
+               '-o', $filename, '-');
+    open(my $proc_out, '|-', @cmd)
+        or die "couldn't start sort process: @cmd";
+    my $buf;
+    while (read($in_fh, $buf, 8192)) {
+        print $proc_out $buf;
+    }
+    close $proc_out
+        or die "Exit status $? from sort";
+
+    return $tmp_fh;
 }
 
 sub out_one {
@@ -420,8 +479,12 @@ sub print_usage {
         [--ld | label-del <del>]   # label delimiter
         [--sort-stats]             # sort stats pairs in output
         [--sort]                   # sort by index in output
+        [--split <lines>]          # sort the input and split at line count,
+                                   # but don't split across an index
+                                   # calls the unix command-line sort
         [--summary]                # summarize the data over all index values
         [--test]                   # run self test
+        [--tmp-dir <dir>]          # temp directory for sorting
         [--version|V]              # print out the version number
         [--focl]                   # input file names are on the cmd line
         [-h | --help]              # this help msg
