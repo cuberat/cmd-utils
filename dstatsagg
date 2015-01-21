@@ -38,7 +38,7 @@ use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
 use File::Temp;
 
-our $VERSION = "0.3";
+our $VERSION = "0.4";
 
 # main
 {
@@ -57,6 +57,8 @@ our $VERSION = "0.3";
                                     "test|self-test",
                                     "version|V",
                                     "self_install|self-install",
+                                    "installprefix|install-prefix=s",
+                                    "installbindir|install-bindir=s",
                                     "tmpdir|tmp-dir=s",
                                     "focl",
                                   ], { });
@@ -68,7 +70,8 @@ our $VERSION = "0.3";
     }
 
     if ($opts->{self_install}) {
-        $self->self_install($opts->{prefix}, $opts->{bindir}, 'dstatsagg');
+        $self->self_install($opts->{installprefix}, $opts->{installbindir},
+                            'dstatsagg');
     }
 
     if ($opts->{version}) {
@@ -282,6 +285,21 @@ sub sort_file_handle {
     return $tmp_fh;
 }
 
+sub find_exec {
+    my ($self, $name) = @_;
+
+    my $path;
+    my $home_bin = (getpwuid($>))[7] . "/bin";
+    for my $dir ($home_bin, '/usr/local/bin', '/usr/bin', '/bin', '/opt/bin') {
+        $path = "$dir/$name";
+        if (-x $path) {
+            return $path;
+        }
+    }
+
+    return undef;
+}
+
 sub out_one {
     my ($self, $out_fh, $index, $data, $opts) = @_;
 
@@ -456,7 +474,7 @@ sub self_install {
 
     chmod 0755, $new_path;
 
-    print STDERR "Installed as $new_path\n";
+    print STDERR "Installed as $new_path with perl '$perl'\n";
 }
 
 sub get_full_version {
@@ -485,6 +503,8 @@ sub print_usage {
         [--summary]                # summarize the data over all index values
         [--test]                   # run self test
         [--tmp-dir <dir>]          # temp directory for sorting
+        [--install-prefix <dir>]   # directory prefix for installation
+        [--install-bindir <dir>]   # bin director for installation
         [--version|V]              # print out the version number
         [--focl]                   # input file names are on the cmd line
         [-h | --help]              # this help msg
