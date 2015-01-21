@@ -72,6 +72,7 @@ our $VERSION = "0.4";
     if ($opts->{self_install}) {
         $self->self_install($opts->{installprefix}, $opts->{installbindir},
                             'dstatsagg');
+        exit 0;
     }
 
     if ($opts->{version}) {
