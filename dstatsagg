@@ -527,6 +527,8 @@ sub print_usage {
         [--version|V]              # print out the version number
         [--focl]                   # input file names are on the cmd line
         [-h | --help]              # this help msg
+
+    Recognized escape sequences for delimiters: \r, \n, \t
 \n};
 }
 
