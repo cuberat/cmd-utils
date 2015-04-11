@@ -38,7 +38,7 @@ use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
 use File::Temp;
 
-our $VERSION = "0.4";
+our $VERSION = "0.5";
 
 # main
 {
@@ -350,6 +350,24 @@ sub init {
     if ($opts->{sort}) {
         $opts->{sortstats} = 1;
     }
+
+    my $rdata = { n => "\n",
+                  r => "\r",
+                  t => "\t",
+                };
+
+    my $replace = sub {
+        my ($char) = @_;
+
+        my $new = $rdata->{$char};
+        return $new if $new;
+
+        return "\\$char";
+    };
+
+    $opts->{indexsep} =~ s/(?<!\\)\\([^\\])/$replace->($1)/eg;
+    $opts->{pairsep} =~ s/(?<!\\)\\([^\\])/$replace->($1)/eg;
+    $opts->{labelsep} =~ s/(?<!\\)\\([^\\])/$replace->($1)/eg;
 }
 
 sub run_tests {
