@@ -1,6 +1,6 @@
 #!/usr/local/bin/perl
 
-# Copyright (c) 2008-2013 Don Owens <don@regexguy.com>.  All rights reserved.
+# Copyright (c) 2008-2013,2015 Don Owens <don@regexguy.com>.  All rights reserved.
 #
 # This software is released under the BSD license:
 #
@@ -38,7 +38,7 @@ use warnings;
 # use Carp;
 use Getopt::Long qw(:config no_ignore_case bundling);
 
-our $VERSION = '0.3';
+our $VERSION = '0.4';
 
 # main
 {
@@ -102,10 +102,12 @@ sub process_options {
     $self->my_setup_options([ 'a', 'F', 'l', 'h', 'd', 'T', 'S', 'r', 'c', 't',
                               'nosort|f', 'A', 'i', 'help', 'u', 'xml', 'json',
                               'n', 'R', 'unixts', 'dirsonly|do', 'filesonly',
-                              'self_install|self-install', 'test', 'version|V',
+                              'self_install|self-install', 'test|self-test',
+                              'version|V',
                             ],
-                            [ 'regex=s', 'count=i', 'unique=s', 'bindir=s',
-                              'prefix=s', ] );
+                            [ 'regex=s', 'count=i', 'unique=s',
+                              'bindir|install-bindir=s',
+                              'prefix|install-prefix=s', ] );
 
     if (defined $self->{options}{unique}) {
         $self->{unique_regex} = qr/$self->{options}{unique}/;
@@ -885,3 +887,51 @@ sub quick_check_options {
     }
 }
 
+sub self_install {
+    my ($self, $prefix, $bin_dir) = @_;
+
+    unless (defined $prefix or defined $bin_dir) {
+        $bin_dir = '/usr/local/bin';
+    }
+
+    $bin_dir = "$prefix/bin" unless defined $bin_dir;
+
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    my $script = __FILE__;
+
+    unless (-w $bin_dir) {
+        print STDERR "\ndconfini: can't write to $bin_dir.  ";
+        print STDERR "Maybe you need to run me as root?\n\n";
+        exit 1;
+    }
+
+    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+    my $new_path = "$bin_dir/$prog";
+
+    open(my $in_fh, '<', $script) or
+        die "couldn't open script source '$script'";
+    my $line;
+
+    open(my $out_fh, '>', $new_path)
+        or die "couldn't open output file $new_path";
+
+    $line = <$in_fh>; # eat shebang line
+    print $out_fh "#!$perl\n";
+
+    while ($line = <$in_fh>) {
+        print $out_fh $line;
+    }
+
+    close $out_fh;
+    close $in_fh;
+
+    chmod 0755, $new_path;
+
+    print STDERR "Installed as $new_path\n";
+}

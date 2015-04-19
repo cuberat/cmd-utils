@@ -1,6 +1,6 @@
 #!/usr/local/bin/perl
 
-# Copyright (c) 2013 Don Owens <don@regexguy.com>.  All rights reserved.
+# Copyright (c) 2013,2015 Don Owens <don@regexguy.com>.  All rights reserved.
 #
 # This software is released under the BSD license:
 #
@@ -42,7 +42,7 @@ use warnings;
 use Fcntl qw(:flock);
 use Getopt::Long qw(:config no_ignore_case bundling);
 
-our $VERSION = '0.1';
+our $VERSION = '0.2';
 
 # main
 {
@@ -59,6 +59,10 @@ our $VERSION = '0.1';
         }
 
         if ($a =~ /^-/) {
+            if ($a =~ /^--(?:self_install|selfinstall|self-install|prefix|install-prefix|bindir|install-bindir)$/) {
+                @option_args = @ARGV;
+                last;
+            }
             push @option_args, $a;
         }
         else {
@@ -75,8 +79,8 @@ our $VERSION = '0.1';
                                     "error",
                                     "quiet",
                                     "self_install|selfinstall|self-install",
-                                    "prefix=s",
-                                    "bindir=s",
+                                    "prefix|install-prefix=s",
+                                    "bindir|install-bindir=s",
                                   ], { });
     $self->check_options($opts, [ ]); # die's on bad options
 

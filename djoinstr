@@ -1,6 +1,6 @@
 #!/usr/local/bin/perl
 
-# Copyright (c) 2012-2013 Don Owens <don@regexguy.com>.  All rights reserved.
+# Copyright (c) 2012-2013,2015 Don Owens <don@regexguy.com>.  All rights reserved.
 #
 # This software is released under the BSD license:
 #
@@ -46,7 +46,7 @@ use strict;
 use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
 
-our $VERSION = "0.3";
+our $VERSION = "0.4";
 
 # main
 {
@@ -59,7 +59,8 @@ our $VERSION = "0.3";
                                     "prefix=s",
                                     "postfix=s",
                                     "self_install|selfinstall|self-install",
-                                    "bindir=s",
+                                    "install_bindir|install-bindir=s",
+                                    "install_prefix|install-prefix=s",
                                     "test",
                                   ], { os => ',', is => "\n" });
     $self->check_options($opts, [ 'is', 'os' ]); # die's on bad options
@@ -141,10 +142,11 @@ sub quick_check_options {
     }
 
     if ($opts->{self_install}) {
-        $self->self_install($opts->{prefix}, $opts->{bindir});
+        $self->self_install($opts->{install_prefix}, $opts->{install_bindir});
         exit 0;
     }
 }
+
 
 ########## begin option processing ##########
 sub print_usage {
@@ -270,7 +272,8 @@ sub self_install {
         exit 1;
     }
 
-    my $new_path = "$bin_dir/djoinstr";
+    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+    my $new_path = "$bin_dir/$prog";
 
     open(my $in_fh, '<', $script) or
         die "couldn't open script source '$script'";

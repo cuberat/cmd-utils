@@ -1,6 +1,6 @@
 #!/usr/local/bin/perl
 
-# Copyright (c) 2013 Don Owens <don@regexguy.com>.  All rights reserved.
+# Copyright (c) 2013,2015 Don Owens <don@regexguy.com>.  All rights reserved.
 #
 # This software is released under the BSD license:
 #
@@ -41,7 +41,7 @@ use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
 use Data::Dumper ();
 
-our $VERSION = "0.2";
+our $VERSION = "0.3";
 
 # main
 {
@@ -58,8 +58,8 @@ our $VERSION = "0.2";
                                     "n",
                                     "pod|man",
                                     "self_install|selfinstall|self-install",
-                                    "prefix=s",
-                                    "bindir=s",
+                                    "prefix|install-prefix=s",
+                                    "bindir|install-bindir=s",
                                     "test|self-test",
                                   ], { });
     $self->check_options($opts, [ ]); # die's on bad options
@@ -459,7 +459,7 @@ sub self_install {
         exit 1;
     }
 
-    my $new_path = "$bin_dir/djoinstr";
+    my $new_path = "$bin_dir/dconfjson";
 
     open(my $in_fh, '<', $script) or
         die "couldn't open script source '$script'";
