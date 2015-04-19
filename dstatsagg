@@ -48,6 +48,7 @@ our $VERSION = "0.5";
                                     "infile|in-file|in|i=s",
                                     "outfile|out-file|out|o=s",
                                     "indexsep|index-sep|indexdel|index-del|is|id=s",
+                                    "indexsepre|index-sep-re|isre|index-del-re|idre=s",
                                     "pairsep|pair-sep|pair-del|ps|pd=s",
                                     "labelsep|label-sep|label-del|ls|ld=s",
                                     "split=i",
@@ -123,21 +124,14 @@ sub process_multi {
     my $out_fh = $self->{out_fh};
     my $opts = $self->{opts};
 
-    my $is = $opts->{indexsep};
-    my $ps = $opts->{pairsep};
-    my $ls = $opts->{labelsep};
-
-    my $is_re = qr/\Q$is\E/;
-    my $ps_re = qr/\Q$ps\E/;
-    my $ls_re = qr/\Q$ls\E/;
-
     my $data = { };
+    my $del_res = $self->get_delimiter_re($opts);
 
     my $file;
     while ( defined($file = $self->get_next_file) ) {
         open(my $in_fh, '<', $file)
             or die "$0: couldn't open input file '$file'";
-        $self->process_one_file($in_fh, $data, $is_re, $ps_re, $ls_re);
+        $self->process_one_file($in_fh, $data, @$del_res{'is', 'ps', 'ls'});
         close $in_fh;
     }
 
@@ -148,18 +142,36 @@ sub process_multi {
 sub process_one {
     my ($self, $opts, $in_fh, $out_fh) = @_;
 
+    my $data = { };
+
+    my $del_res = $self->get_delimiter_re($opts);
+    $self->process_one_file($in_fh, $data, @$del_res{'is', 'ps', 'ls'}, $out_fh);
+    $self->write_aggregated($out_fh, $opts, $data);
+}
+
+sub get_delimiter_re {
+    my ($self, $opts) = @_;
+
     my $is = $opts->{indexsep};
     my $ps = $opts->{pairsep};
     my $ls = $opts->{labelsep};
 
-    my $is_re = qr/\Q$is\E/;
+    my $is_re;
+
+    if (defined $opts->{indexsepre}) {
+        $is_re = qr/$opts->{indexsepre}/;
+    }
+    else {
+        $is_re = qr/\Q$is\E/;
+    }
+
     my $ps_re = qr/\Q$ps\E/;
     my $ls_re = qr/\Q$ls\E/;
 
-    my $data = { };
-
-    $self->process_one_file($in_fh, $data, $is_re, $ps_re, $ls_re, $out_fh);
-    $self->write_aggregated($out_fh, $opts, $data);
+    return { is => $is_re,
+             ps => $ps_re,
+             ls => $ls_re,
+           };
 }
 
 sub write_aggregated {
@@ -373,7 +385,7 @@ sub init {
 sub run_tests {
     my ($self) = @_;
 
-    eval 'use Test::More tests => 1';
+    eval 'use Test::More tests => 2';
 
     my $in_str = "";
     my $expected = "";
@@ -383,11 +395,17 @@ sub run_tests {
 
     $self->test_one($in_str, $expected, "2 items", '|', ',', ':');
 
+    $in_str = "127.0.0.1\tfoo:1,bar:2\n127.0.0.2|foo:3,bar:4\n127.0.0.1|foo:3,bar:5\n";
+    $expected = "127.0.0.1|bar:7,foo:4\n127.0.0.2|bar:4,foo:3\n";
+
+    $self->test_one($in_str, $expected, "2 items with regex", '|', ',', ':',
+                   '\t|\|');
+
     exit 0;
 }
 
 sub test_one {
-    my ($self, $in_str, $expected, $desc, $id, $pd, $ld) = @_;
+    my ($self, $in_str, $expected, $desc, $id, $pd, $ld, $idre) = @_;
 
     my $out_str = '';
     open(my $in_fh, '<', \$in_str);
@@ -396,6 +414,7 @@ sub test_one {
     my $opts = { sortstats => 1, sort => 1,
                  indexsep => $id, pairsep => $pd, labelsep => $ld,
                };
+    $opts->{indexsepre} = $idre if defined $idre;
 
     $self->process_one($opts, $in_fh, $out_fh);
 
@@ -514,6 +533,7 @@ sub print_usage {
         [--id | --index-del <del>] # index delimiter
         [--pd | --pair-del <del>]  # pair delimiter
         [--ld | label-del <del>]   # label delimiter
+        [--idr | index-del-re <re> # regex for index delimiter
         [--sort-stats]             # sort stats pairs in output
         [--sort]                   # sort by index in output
         [--split <lines>]          # sort the input and split at line count,
