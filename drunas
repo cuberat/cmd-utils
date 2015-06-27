@@ -1,0 +1,137 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Getopt::Long qw(:config no_ignore_case bundling);
+
+# main
+{
+    my $self = bless { };
+
+    # my $opts = $self->get_options([ "help|h",
+    #                                 "group|g=s",
+    #                                 "user|u=s",
+    #                               ], { });
+    # $self->check_options($opts, [ 'user' ]); # die's on bad options
+
+    # my $user = $opts->{user};
+
+    my $user = shift @ARGV;
+    my $user_id;
+    my $group_id;
+    if ($user =~ /^\d+$/) {
+        $user_id = $user;
+        ($user_id, $group_id) = (getpwuid($user_id))[2,3];
+    }
+    else {
+        ($user_id, $group_id) = (getpwnam($user))[2,3];
+    }
+
+    $( = $group_id;
+    if ($!) {
+        print STDERR "Error changing real group ID $group_id: $!\n";
+    }
+
+    $) = $group_id;
+    if ($!) {
+        print STDERR "Error changing effective group ID $group_id: $!\n";
+    }
+
+    $< = $user_id;
+    if ($!) {
+        print STDERR "Error changing real user ID $user_id: $!\n";
+    }
+
+    $> = $user_id;
+    if ($!) {
+        print STDERR "Error changing effective user ID $user_id: $!\n";
+    }
+
+    exec {$ARGV[0]} @ARGV;
+
+}
+
+exit 0;
+
+###############################################################################
+# Subroutines
+
+
+########## begin option processing ##########
+sub print_usage {
+    print STDERR qq{\nUsage: @{[ ($0 =~ m{\A.*/([^/]+)\Z})[0] || $0 ]} options
+
+    Options:
+
+        [-h | --help]    # this help msg
+\n};
+}
+
+sub check_options {
+    my ($self, $opts, $required) = @_;
+
+    if (not $opts or $opts->{help}) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    my $opt_ok = 1;
+    $required = [ ] unless $required;
+    foreach my $key (@$required) {
+        if (defined($opts->{$key})) {
+            if (my $v = $opts->{$key}) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        unless (@$v) {
+                            $opt_ok = 0;
+                            warn "missing required option '$key'
+";
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            $opt_ok = 0;
+            warn "missing required option '$key'\n";
+        }
+    }
+
+    unless ($opt_ok) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    return $opt_ok;
+}
+
+sub get_options {
+    my ($self, $spec, $defaults) = @_;
+    my %opts = $defaults ? %$defaults : ();
+    $spec = [ ] unless $spec;
+
+    my $process_opt = sub {
+        my ($key, $val) = @_;
+
+        if (scalar(@_) > 2) {
+            $opts{$key}{$val} = $_[2];
+        }
+        else {
+            if ( exists($opts{$key}) and (my $v = $opts{$key}) ) {
+                if (my $ref = ref($v)) {
+                    if ($ref eq 'ARRAY' ) {
+                        push @{ $opts{$key} }, $val;
+                        return 1;
+                    }
+                }
+            }
+
+            $opts{$key} = $val;
+        }
+    };
+
+    my $opt_rv = Getopt::Long::GetOptions(map { ($_ => $process_opt) } @$spec);
+
+    return $opt_rv ? \%opts : undef;
+}
+########## end option processing ##########
