@@ -206,11 +206,17 @@ sub self_install {
 
 ########## begin option processing ##########
 sub print_usage {
-    print STDERR qq{\nUsage: @{[ ($0 =~ m{\A.*/([^/]+)\Z})[0] || $0 ]} options
+    print STDERR qq{\nUsage: @{[ ($0 =~ m{\A.*/([^/]+)\Z})[0] || $0 ]} options [timestamps...]
 
     Options:
 
         [-h | --help]    # this help msg
+        [-u | --unix]    # print the unix timestamp (epoc time)
+        [-r | --reverse] # convert unix timestamp to ISO format
+        [--version|V]              # print out the version number
+        [--install-prefix <dir>]   # directory prefix for installation
+        [--install-bindir <dir>]   # bin directory for installation
+        [--self-install]           # perform a self install
 \n};
 }
 
