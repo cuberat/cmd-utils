@@ -543,7 +543,7 @@ sub print_usage {
         [--test]                   # run self test
         [--tmp-dir <dir>]          # temp directory for sorting
         [--install-prefix <dir>]   # directory prefix for installation
-        [--install-bindir <dir>]   # bin director for installation
+        [--install-bindir <dir>]   # bin directory for installation
         [--version|V]              # print out the version number
         [--focl]                   # input file names are on the cmd line
         [-h | --help]              # this help msg
