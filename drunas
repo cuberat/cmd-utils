@@ -1,22 +1,105 @@
-#!/usr/bin/perl
+#!/usr/local/bin/perl
+
+# Copyright (c) 2015 Don Owens <don@regexguy.com>.  All rights reserved.
+#
+# This software is released under the BSD license:
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+#  * Redistributions in binary form must reproduce the above
+#    copyright notice, this list of conditions and the following
+#    disclaimer in the documentation and/or other materials provided
+#    with the distribution.
+#
+#  * Neither the name of the author nor the names of its
+#    contributors may be used to endorse or promote products derived
+#    from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+# OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use strict;
 use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
+use Data::Dumper ();
+
+our $VERSION = '0.1';
 
 # main
 {
     my $self = bless { };
 
-    # my $opts = $self->get_options([ "help|h",
-    #                                 "group|g=s",
-    #                                 "user|u=s",
-    #                               ], { });
-    # $self->check_options($opts, [ 'user' ]); # die's on bad options
+    my $opts_conf = [ "help|h",
+                      "version|V",
+                      "check",
+                      "error",
+                      "quiet",
+                      "self_install|selfinstall|self-install",
+                      "prefix|install-prefix=s",
+                      "bindir|install-bindir=s",
+                    ];
+    my ($long_opts, $long_opts_arg, $short_opts, $short_opts_arg) =
+        $self->get_opts_re($opts_conf);
 
-    # my $user = $opts->{user};
+    my @cmd;
+    my @option_args;
 
-    my $user = shift @ARGV;
+    my $end_options;
+    foreach my $a (@ARGV) {
+        if ($end_options) {
+            push @cmd, $a;
+            next;
+        }
+
+        if ($a =~ /^-/) {
+            if ($a =~ /^--(?:self_install|selfinstall|self-install|prefix|install-prefix|bindir|install-bindir)$/) {
+                @option_args = @ARGV;
+                last;
+            }
+            push @option_args, $a;
+        }
+        else {
+            push @cmd, $a;
+            $end_options = 1;
+        }
+    }
+
+    @ARGV = @option_args;
+
+    my $opts = $self->get_options($opts_conf, { });
+    $self->check_options($opts, [ ]); # die's on bad options
+
+    if ($opts->{version}) {
+        print STDERR $self->get_full_version;
+        exit 0;
+    }
+
+    if ($opts->{self_install}) {
+        $self->self_install($opts->{prefix}, $opts->{bindir});
+        exit 0;
+    }
+
+    if (@cmd < 1) {
+        $self->print_usage;
+        exit 1;
+    }
+
+    my $user = shift @cmd;
     my $user_id;
     my $group_id;
     if ($user =~ /^\d+$/) {
@@ -47,7 +130,7 @@ use Getopt::Long qw(:config no_ignore_case bundling);
         print STDERR "Error changing effective user ID $user_id: $!\n";
     }
 
-    exec {$ARGV[0]} @ARGV;
+    exec {$cmd[0]} @cmd;
 
 }
 
@@ -56,6 +139,115 @@ exit 0;
 ###############################################################################
 # Subroutines
 
+sub get_opts_re {
+    my ($self, $opts_conf) = @_;
+
+    my @long;
+    my @long_arg;
+    my @short;
+    my @short_arg;
+    foreach my $e (@$opts_conf) {
+        my ($names, $arg) = split /=/, $e, 2;
+
+        my @names = split /\|/, $names;
+        my $short;
+        my $long;
+        if ($arg) {
+            $short = \@short_arg;
+            $long = \@long_arg;
+        }
+        else {
+            $short = \@short;
+            $long = \@long;
+        }
+
+        foreach my $name (@names) {
+            if (length($name) == 1) {
+                push @$short, $name;
+            }
+            else {
+                push @$long, $name;
+            }
+        }
+    }
+
+    my $long_re = $self->get_one_opt_re(\@long, 0);
+    my $long_arg_re = $self->get_one_opt_re(\@long_arg, 1);
+    my $short_re = $self->get_one_opt_re(\@short, 0);
+    my $short_arg_re = $self->get_one_opt_re(\@short_arg, 1);
+
+    return ($long_re, $long_arg_re, $short_re, $short_arg_re);
+}
+
+sub get_one_opt_re {
+    my ($self, $list, $is_long) = @_;
+
+    if ($list and @$list) {
+        my $re = join('|', @$list);
+        my $pre = $is_long ? '--' : '-';
+        $re = qr/^$pre(?:$re)$/;
+
+        return $re;
+    }
+
+    return undef;
+}
+
+sub get_full_version {
+    my ($self) = @_;
+
+    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+
+    return "$prog " . $VERSION . "\n";
+}
+
+sub self_install {
+    my ($self, $prefix, $bin_dir) = @_;
+
+    unless (defined $prefix or defined $bin_dir) {
+        $bin_dir = '/usr/local/bin';
+    }
+
+    $bin_dir = "$prefix/bin" unless defined $bin_dir;
+
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    my $script = __FILE__;
+
+    unless (-w $bin_dir) {
+        print STDERR "\ndconfini: can't write to $bin_dir.  ";
+        print STDERR "Maybe you need to run me as root?\n\n";
+        exit 1;
+    }
+
+    my $new_path = "$bin_dir/dlockf";
+
+    open(my $in_fh, '<', $script) or
+        die "couldn't open script source '$script'";
+    my $line;
+
+    open(my $out_fh, '>', $new_path)
+        or die "couldn't open output file $new_path";
+
+    $line = <$in_fh>; # eat shebang line
+    print $out_fh "#!$perl\n";
+
+    while ($line = <$in_fh>) {
+        print $out_fh $line;
+    }
+
+    close $out_fh;
+    close $in_fh;
+
+    chmod 0755, $new_path;
+
+    print STDERR "Installed as $new_path\n";
+}
 
 ########## begin option processing ##########
 sub print_usage {
