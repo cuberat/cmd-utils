@@ -33,12 +33,13 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use 5.008;
 
 use strict;
 use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
 
-our $VERSION = "0.4";
+our $VERSION = "0.5";
 
 # main
 {
@@ -219,7 +220,7 @@ sub self_install {
         exit 1;
     }
 
-    my $prog = ($0 =~ m{\A.*/([^/]+)\Z})[0];
+    (my $prog = $0) =~ s{\A.*/([^/]+)\Z}{$1};
     my $new_path = "$bin_dir/$prog";
 
     open(my $in_fh, '<', $script) or

@@ -33,12 +33,14 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use 5.010;
+
 use strict;
 use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
 use File::Temp;
 
-our $VERSION = "0.5";
+our $VERSION = "0.6";
 
 # main
 {
@@ -51,6 +53,7 @@ our $VERSION = "0.5";
                                     "indexsepre|index-sep-re|isre|index-del-re|idre=s",
                                     "pairsep|pair-sep|pair-del|ps|pd=s",
                                     "labelsep|label-sep|label-del|ls|ld=s",
+                                    "maxsize|max-size=i",
                                     "split=i",
                                     "sortstats|sort-stats",
                                     "sort",
@@ -62,7 +65,10 @@ our $VERSION = "0.5";
                                     "installbindir|install-bindir=s",
                                     "tmpdir|tmp-dir=s",
                                     "focl",
-                                  ], { });
+                                  ], { indexsep => "\t",
+                                       pairsep => ",",
+                                       labelsep => "=",
+                                     });
 
     $self->check_tests;
     if ($opts->{test}) {
@@ -71,8 +77,7 @@ our $VERSION = "0.5";
     }
 
     if ($opts->{self_install}) {
-        $self->self_install($opts->{installprefix}, $opts->{installbindir},
-                            'dstatsagg');
+        $self->self_install($opts->{installprefix}, $opts->{installbindir});
         exit 0;
     }
 
@@ -222,6 +227,7 @@ sub process_one_file {
     my $count = 0;
     my $last_index = '';
     my $check_index = 0;
+    my $max_size = $self->{opts}{maxsize};
 
     if ($split) {
         $in_fh = $self->sort_file_handle($in_fh);
@@ -251,6 +257,12 @@ sub process_one_file {
             $d->{$k} += $v;
         }
         $count++;
+
+        if (defined $max_size and $count >= $max_size) {
+            $self->write_aggregated($out_fh, $self->{opts}, $data);
+            %$data = ();
+            $count = 0;
+        }
     }
 
 }
@@ -468,7 +480,7 @@ sub get_perl_exec {
 }
 
 sub self_install {
-    my ($self, $prefix, $bin_dir, $prog_name) = @_;
+    my ($self, $prefix, $bin_dir) = @_;
 
     unless (defined $prefix or defined $bin_dir) {
         $bin_dir = '/usr/local/bin';
@@ -485,13 +497,15 @@ sub self_install {
 
     my $script = __FILE__;
 
+    (my $prog = $0) =~ s{\A.*/([^/]+)\Z}{$1};
+
     unless (-w $bin_dir) {
-        print STDERR "\n$prog_name: can't write to $bin_dir.  ";
+        print STDERR "\n$prog: can't write to $bin_dir.  ";
         print STDERR "Maybe you need to run me as root?\n\n";
         exit 1;
     }
 
-    my $new_path = "$bin_dir/$prog_name";
+    my $new_path = "$bin_dir/$prog";
 
     open(my $in_fh, '<', $script) or
         die "couldn't open script source '$script'";
@@ -512,7 +526,8 @@ sub self_install {
 
     chmod 0755, $new_path;
 
-    print STDERR "Installed as $new_path with perl '$perl'\n";
+    # print STDERR "Installed as $new_path with perl '$perl'\n";
+    print STDERR "Installed as $new_path\n";
 }
 
 sub get_full_version {
@@ -530,9 +545,9 @@ sub print_usage {
     Options:
         [-i | --in-file <file>]    # input file
         [-o | --out-file <file>]   # output file
-        [--id | --index-del <del>] # index delimiter
-        [--pd | --pair-del <del>]  # pair delimiter
-        [--ld | label-del <del>]   # label delimiter
+        [--id | --index-del <del>] # index delimiter (defaults to tab char)
+        [--pd | --pair-del <del>]  # pair delimiter (defaults to ",")
+        [--ld | label-del <del>]   # label delimiter (defaults to "=")
         [--idr | index-del-re <re> # regex for index delimiter
         [--sort-stats]             # sort stats pairs in output
         [--sort]                   # sort by index in output
@@ -540,8 +555,11 @@ sub print_usage {
                                    # but don't split across an index
                                    # calls the unix command-line sort
         [--summary]                # summarize the data over all index values
+        [--max-size <num>]         # maximum number of index values to
+                                   # aggregate at one time
         [--test]                   # run self test
         [--tmp-dir <dir>]          # temp directory for sorting
+        [--self-install]           # install dstatsagg
         [--install-prefix <dir>]   # directory prefix for installation
         [--install-bindir <dir>]   # bin directory for installation
         [--version|V]              # print out the version number
