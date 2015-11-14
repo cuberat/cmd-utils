@@ -42,7 +42,7 @@ use warnings;
 use Fcntl qw(:flock);
 use Getopt::Long qw(:config no_ignore_case bundling);
 
-our $VERSION = '0.2';
+our $VERSION = '0.3';
 
 # main
 {
@@ -59,7 +59,7 @@ our $VERSION = '0.2';
         }
 
         if ($a =~ /^-/) {
-            if ($a =~ /^--(?:self_install|selfinstall|self-install|prefix|install-prefix|bindir|install-bindir)$/) {
+            if ($a =~ /^--(?:self_install|selfinstall|self-install|prefix|install-prefix|bindir|install-bindir|self-test|test)$/) {
                 @option_args = @ARGV;
                 last;
             }
@@ -81,11 +81,18 @@ our $VERSION = '0.2';
                                     "self_install|selfinstall|self-install",
                                     "prefix|install-prefix=s",
                                     "bindir|install-bindir=s",
+                                    "test|self-test=s",
                                   ], { });
     $self->check_options($opts, [ ]); # die's on bad options
 
     if ($opts->{version}) {
         print STDERR $self->get_full_version;
+        exit 0;
+    }
+
+    $self->check_tests;
+    if ($opts->{test}) {
+        $self->run_self_test;
         exit 0;
     }
 
@@ -307,4 +314,66 @@ sub self_install {
     chmod 0755, $new_path;
 
     print STDERR "Installed as $new_path\n";
+}
+
+###############################################################################
+# test stuff
+
+sub run_tests {
+    my ($self) = @_;
+
+    eval 'use Test::More tests => 1';
+
+    $self->test_lock;
+}
+
+
+sub test_lock {
+    my ($self) = @_;
+
+    my $lock_file = '';
+    my $lock_fh = $self->get_lock($lock_file);
+    ok(1, "lock check");
+}
+
+sub check_tests {
+    my ($self) = @_;
+
+    if ($ENV{DLOCKF_TEST_ACTIVE}) {
+        $self->run_tests;
+        exit 0;
+    }
+}
+
+sub run_self_test {
+    my ($self) = @_;
+
+    if ($ENV{DLOCKF_TEST_ACTIVE}) {
+        $self->run_tests;
+        exit 0;
+    }
+
+    $ENV{DLOCKF_TEST_ACTIVE} = 1;
+
+    my $perl = $self->get_perl_exec;
+    my $me = __FILE__;
+
+    (my $sf_me = $me) =~ s/'/\\'/g;
+    my @cmd = ($perl, '-MTest::Harness', '-e', "runtests('$sf_me')");
+
+    exec {$cmd[0]} @cmd;
+
+    exit 0;
+
+}
+
+sub get_perl_exec {
+    my $perl;
+    {
+        no warnings 'once';
+        require Config;
+        $perl = $Config::Config{perlpath};
+    }
+
+    return $perl;
 }
