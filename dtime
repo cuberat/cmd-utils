@@ -41,7 +41,7 @@ use Getopt::Long qw(:config no_ignore_case bundling);
 
 use Time::Local;
 
-our $VERSION = '0.1';
+our $VERSION = '0.2';
 
 # main
 {
@@ -54,6 +54,7 @@ our $VERSION = '0.1';
                                     "bindir|install-bindir=s",
                                     "reverse|r",
                                     "unix|u",
+                                    "utc",
                                   ], { });
     $self->check_options($opts, [ ]); # die's on bad options
 
@@ -72,7 +73,8 @@ our $VERSION = '0.1';
             printf "%d\n", time();
         }
         else {
-            my ($ts, $wday) = $self->unix_to_local(time());
+            my ($ts, $wday) = $self->unix_to_dpy(time(), $opts->{utc});
+
             printf "%s (%s)\n", $ts, $wday;
         }
         exit 0;
@@ -80,15 +82,17 @@ our $VERSION = '0.1';
 
     if ($opts->{reverse}) {
         foreach my $arg (@ARGV) {
-            my ($ts, $wday) = $self->unix_to_local($arg);
-            printf "%s (%s)\n", $ts, $wday;
+            my $ts = $self->dpy_to_unix($arg, $opts->{utc});
+            printf "%d\n", $ts;
         }
     }
     else {
         foreach my $arg (@ARGV) {
-            my $ts = $self->local_to_unix($arg);
-            printf "%d\n", $ts;
+            my ($ts, $wday) = $self->unix_to_dpy($arg, $opts->{utc});
+
+            printf "%s (%s)\n", $ts, $wday;
         }
+
     }
 }
 
@@ -97,15 +101,22 @@ exit 0;
 ###############################################################################
 # Subroutines
 
-sub unix_to_local {
-    my ($self, $ts_in) = @_;
+sub unix_to_dpy {
+    my ($self, $ts_in, $utc) = @_;
     my $re = qr/\d+/;
 
     unless ($ts_in =~ /($re)/) {
         warn "'$ts_in' not in format $re";
     }
 
-    my ($sec, $min, $hour, $mday, $mon, $year, $wday) = localtime($ts_in);
+    my ($sec, $min, $hour, $mday, $mon, $year, $wday);
+    if ($utc) {
+        ($sec, $min, $hour, $mday, $mon, $year, $wday) = gmtime($ts_in);
+    }
+    else {
+        ($sec, $min, $hour, $mday, $mon, $year, $wday) = localtime($ts_in);
+    }
+
     $mon++;
     $year += 1900 if $year < 1900;
 
@@ -117,8 +128,28 @@ sub unix_to_local {
     return wantarray ? ($ts, $day) : $ts;
 }
 
+sub unix_to_local {
+    my ($self, $ts_in) = @_;
+    return $self->unix_to_dpy($ts_in);
+}
+
+sub unix_to_utc {
+    my ($self, $ts_in) = @_;
+    return $self->unix_to_dpy($ts_in);
+}
+
 sub local_to_unix {
     my ($self, $ts) = @_;
+    return $self->dpy_to_unix($ts);
+}
+
+sub utc_to_unix {
+    my ($self, $ts) = @_;
+    return $self->dpy_to_unix($ts, 1);
+}
+
+sub dpy_to_unix {
+    my ($self, $ts, $utc) = @_;
 
     my ($date_str, $time_str) = split /\s+/, $ts;
     (my $date_time = $date_str) =~ s/[-:]//g;
@@ -142,7 +173,12 @@ sub local_to_unix {
         $mon--;
         $year -= 1900;
 
-        return timelocal($sec, $min, $hour, $mday, $mon, $year);
+        if ($utc) {
+            return timegm($sec, $min, $hour, $mday, $mon, $year);
+        }
+        else {
+            return timelocal($sec, $min, $hour, $mday, $mon, $year);
+        }
     }
 
     return 0;
