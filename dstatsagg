@@ -496,7 +496,6 @@ sub self_install {
     }
 
     my $script = __FILE__;
-
     (my $prog = $0) =~ s{\A.*/([^/]+)\Z}{$1};
 
     unless (-w $bin_dir) {

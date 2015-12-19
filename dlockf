@@ -285,14 +285,15 @@ sub self_install {
     }
 
     my $script = __FILE__;
+    (my $prog = $0) =~ s{\A.*/([^/]+)\Z}{$1};
 
     unless (-w $bin_dir) {
-        print STDERR "\ndconfini: can't write to $bin_dir.  ";
+        print STDERR "\n$prog: can't write to $bin_dir.  ";
         print STDERR "Maybe you need to run me as root?\n\n";
         exit 1;
     }
 
-    my $new_path = "$bin_dir/dlockf";
+    my $new_path = "$bin_dir/$prog";
 
     open(my $in_fh, '<', $script) or
         die "couldn't open script source '$script'";
