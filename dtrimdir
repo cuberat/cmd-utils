@@ -39,7 +39,7 @@ use strict;
 use warnings;
 use Getopt::Long qw(:config no_ignore_case bundling);
 
-our $VERSION = "0.5";
+our $VERSION = "0.6";
 
 # main
 {
@@ -55,6 +55,10 @@ our $VERSION = "0.5";
                                     "quiet|q",
                                     "count|keep=i",
                                     "move=s",
+                                    "compress",
+                                    "compress_program|compress-program=s",
+                                    "compress_args|compress-args|compress_opts|compress-opts=s",
+                                    "size=i",
                                     "verbose|v",
                                     "self_install|selfinstall|self-install",
                                     "bindir|install-bindir=s",
@@ -64,10 +68,12 @@ our $VERSION = "0.5";
 
     $self->quick_check_options($opts);
 
-    $self->check_options($opts, [ 'regex',
-                                  'dir',
-                                  'count',
-                                ]); # die's on bad options
+    my @required_check = ('regex', 'dir');
+    unless (defined $opts->{size} and $opts->{size} > 0) {
+        push @required_check, 'count';
+    }
+
+    $self->check_options($opts, \@required_check); # die's on bad options
 
     $self->{opts} = $opts;
     my $prog = $0;
@@ -131,20 +137,85 @@ sub _rotate_files {
 
     my @files = sort @$files;
 
+    my $compress_prog;
+    my @compress_args;
+    if ($opts->{compress}) {
+        if (defined $opts->{compress_program}) {
+            $compress_prog = $opts->{compress_program};
+            unless ($compress_prog =~ m{/}) {
+                $compress_prog = $self->find_exec($compress_prog, "compress_prog")
+            }
+        }
+        else {
+            $compress_prog = $self->find_exec("bzip2", "compress_prog")
+        }
+
+        unless (defined $compress_prog) {
+            die "couldn't find compression program '$compress_prog'";
+        }
+
+        if (defined $opts->{compress_args}) {
+            @compress_args = split /\t/, $opts->{compress_args};
+        }
+    }
+
     my $count = $opts->{count};
+
+    my $allowed_size = $opts->{size};
+    if (defined $allowed_size and $allowed_size > 0) {
+        $count = 0;
+        my $max_size = $allowed_size * 1024 * 1024;
+        my @keep_files;
+        my $total_size = 0;
+        foreach my $file (@files) {
+            my $this_path = $dir . "/" . $file;
+            my $this_size = (stat($this_path))[7];
+
+            $total_size += $this_size;
+            if ($total_size >= $max_size) {
+                if ($total_size == $max_size or $count == 0) {
+                    $count++;
+                }
+                last;
+            }
+
+            $count++;
+        }
+    }
+
     my $v = $opts->{verbose};
     if (@files > $count) {
         my $dir = $opts->{dir};
         my @to_delete = @files[0 .. $#files - $count];
         my @paths = map { "$dir/$_" } @to_delete;
 
-        my $act = $opts->{move} ? 'move' : 'delete';
-        my $acting = $opts->{move} ? 'moving' : 'deleting';
-        my $acted = $opts->{move} ? 'moved' : 'deleted';
+        my ($act, $acting, $acted);
+
+        my $act_extra = "";
+
+        if ($opts->{compress}) {
+            $act = "compress";
+            $acting = "compressing";
+            $acted = "compressed";
+            $act_extra = " with $compress_prog";
+            if (@compress_args) {
+                $act_extra .= " " . join(" ", @compress_args);
+            }
+        }
+        else {
+            $act = $opts->{move} ? 'move' : 'delete';
+            $acting = $opts->{move} ? 'moving' : 'deleting';
+            $acted = $opts->{move} ? 'moved' : 'deleted';
+        }
 
         my $doit;
         if ($opts->{move}) {
             $doit = sub { $self->move_file($_[0]) };
+        }
+        elsif ($opts->{compress}) {
+            $doit = sub {
+                $self->compress_file($_[0], $compress_prog, \@compress_args)
+            };
         }
         else {
             $doit = sub { $self->delete_file($_[0]) };
@@ -157,10 +228,10 @@ sub _rotate_files {
             msg "$acting the following files: " . join(",", @paths) if $v;
             foreach my $path (@paths) {
                 if ($doit->($path)) {
-                    msg "$acted file '$path'" if $v;
+                    msg "$acted file '$path'$act_extra" if $v;
                 }
                 else {
-                    msg "failed to $act file '$path': $!" if $v;
+                    msg "failed to $act file '$path'$act_extra: $!" if $v;
                 }
             }
         }
@@ -170,6 +241,37 @@ sub _rotate_files {
             msg "no files to rotate";
         }
     }
+}
+
+sub compress_file {
+    my ($self, $file_path, $compress_prog) = @_;
+
+    my @compress = UNIVERSAL::isa($compress_prog, 'ARRAY') ? @$compress_prog : ($compress_prog);
+    my @cmd = (@compress, $file_path);
+
+    if (system {$cmd[0]} @cmd) {
+        die "compression of file $file_path using '@compress' failed: $?";
+    }
+
+    return 1;
+}
+
+sub find_exec {
+    my ($self, $exec_name, $cache_name) = @_;
+
+    my $prog = $self->{$cache_name};
+    return $prog if defined $prog;
+
+    for my $dir ("/usr/bin", "/usr/local/bin", "/bin") {
+        my $path = $dir . '/' . $exec_name;
+        if (-x $path) {
+            $self->{$cache_name} = $path;
+            return $path;
+        }
+    }
+
+    return undef;
+
 }
 
 sub quick_check_options {
@@ -252,12 +354,21 @@ sub print_usage {
 
     Options:
         [--check | --dry-run] # just print what would happen
+        [--compress]          # compress instead of deleting
+        [--compress-program <name>]
+                              # name of compression program to use
+                              # (default: bzip2)
+        [--compress-opts <opts_string>]
+                              # whitespace-delimited options to pass to
+                              # compression program
         [--dir <dir>]         # directory where files should be deleted
         [--regex <regexp>]    # regular expression for files to delete
         [--keep <num_files>]  # number of files to keep
         [--move <dir>]        # move to given directory instead of deleting
         [--quiet]             # don't print anything unless there is an error
+        [--size <size_mb>]    # total size of files to keep (in MB)
         [--verbose]           # be noisy in output
+        [--version|-V]        # print version information
         [-h | --help]         # this help msg
 \n};
 }
